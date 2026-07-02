@@ -3,19 +3,20 @@
 
 Important boundary: this script does NOT create cron jobs or send Telegram
 messages itself — those are Cindy's own tools, which this script has no access
-to. Instead it reads work.md and the record of what's already scheduled, then
-prints a *plan*: which reminders to schedule and which to cancel. Cindy carries
-out the plan with her cron tool, then runs this again with --commit to record
-what she did (so nothing gets double-scheduled next time).
+to. Instead it reads work_todo.md and personal_todo.md and the record of
+what's already scheduled, then prints a *plan*: which reminders to schedule
+and which to cancel. Cindy carries out the plan with her cron tool, then runs
+this again with --commit to record what she did (so nothing gets
+double-scheduled next time).
 
 The loop Cindy follows:
     1. python3 reconcile_crons.py                 # see the plan (dry run)
     2. create / cancel the jobs with the cron tool
     3. python3 reconcile_crons.py --commit         # record the new state
 
-A task earns a reminder when it is in work.md, still open, and has a due_time
-in the future. A previously-scheduled reminder is cancelled when its task is
-gone, marked done, or its due time has passed.
+A task earns a reminder when it is in work_todo.md or personal_todo.md, still
+open, and has a due_time in the future. A previously-scheduled reminder is
+cancelled when its task is gone, marked done, or its due time has passed.
 """
 
 import argparse
@@ -37,7 +38,10 @@ def build_plan(root):
     meta = lib.load_metadata(root)
     scheduled = meta["scheduled"]
 
-    tasks = {r["id"]: r for r in lib.read_entries(root, "work")}
+    tasks = {}
+    for b in lib.TODO_BUCKETS:
+        for r in lib.read_entries(root, b):
+            tasks[r["id"]] = r
     to_schedule, to_cancel = [], []
 
     # New reminders needed.

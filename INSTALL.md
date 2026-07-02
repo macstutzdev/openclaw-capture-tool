@@ -19,14 +19,17 @@ capture-tool/
     ├── capture.py               ← file a classified item
     ├── correct.py               ← move / mark done
     ├── reconcile_crons.py       ← compute reminder schedule
-    └── query.py                 ← list / search / due-soon
+    ├── query.py                 ← list / search / due-soon
+    └── migrate_v2_buckets.py    ← one-time v1 → v2 bucket migration
 ```
 
 ## Install steps
 
 1. Drop the `capture-tool/` folder wherever OpenClaw keeps its skills.
 2. Cindy runs `python3 scripts/bootstrap.py` — this creates `capture/` and the
-   four bucket files inside the workspace.
+   six bucket files inside the workspace. (If this workspace already has the
+   old four-bucket layout, run `python3 scripts/migrate_v2_buckets.py --commit`
+   first instead — see SKILL.md.)
 3. On your phone, turn on Telegram's voice-message transcription (Settings →
    your voice notes arrive to Cindy as text).
 4. Send one test message per bucket and check the sorting, the confirmation

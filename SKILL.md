@@ -1,7 +1,7 @@
 ---
 name: capture-tool
-description: Personal capture-and-organize tool driven over Telegram. Use whenever Cormac sends something to remember, do, buy, or note down (a task, errand, shopping item, or MyPoolDashboard website idea) rather than a question or conversation. Sort it into one of four buckets (work, shopping, ideas, inbox), append to a local markdown file, confirm what was filed, and schedule a Telegram reminder for any work task with a due time. Also use when he asks to review, search, correct, or complete items such as "show my shopping list", "move that to work", "I bought the chlorine", or "what's due this week". When unsure whether a message is a capture, treat it as one.
-version: 1.0
+description: Personal capture-and-organize tool driven over Telegram. Use whenever Cormac sends something to remember, do, buy, or note down (a task, errand, shopping item, or MyPoolDashboard website idea) rather than a question or conversation. Sort it into one of six buckets — work to-do, personal to-do, work shopping, personal shopping, ideas, inbox — append to a local markdown file, confirm what was filed, and schedule a Telegram reminder for any to-do item (work or personal) with a due time. Also use when he asks to review, search, correct, or complete items such as "show my shopping list", "move that to work", "I bought the chlorine", or "what's due this week". When unsure whether a message is a capture, treat it as one.
+version: 2.0
 ---
 
 # Capture Tool
@@ -35,14 +35,24 @@ Run once to create the `capture/` folder and empty files. Safe to re-run.
 python3 scripts/bootstrap.py
 ```
 
-This creates `capture/work.md`, `capture/shopping.md`, `capture/ideas.md`,
+This creates `capture/work_todo.md`, `capture/personal_todo.md`,
+`capture/work_shopping.md`, `capture/personal_shopping.md`, `capture/ideas.md`,
 `capture/inbox.md`, and `capture/metadata.json`.
 
-## The four buckets
+If this workspace was set up with the old four-bucket layout (`work.md`,
+`shopping.md`), run the one-time migration first instead — see "Migrating
+from the old layout" below.
 
-- **work** — a concrete thing to do: call/email someone, finish something, a
-  meeting, a deadline. Files to `work.md`.
-- **shopping** — something to buy. Files to `shopping.md`.
+## The six buckets
+
+- **work_todo** — a concrete thing to do *for work*: any professional/job
+  task, not just the pool business — call/email someone, finish something,
+  a meeting, a deadline, an invoice. Files to `work_todo.md`.
+- **personal_todo** — a concrete thing to do that *isn't* work: appointments,
+  family, home admin, personal errands. Files to `personal_todo.md`.
+- **work_shopping** — something to buy for work. Files to `work_shopping.md`.
+- **personal_shopping** — something to buy for himself or the household.
+  Files to `personal_shopping.md`.
 - **ideas** — a *concept* for MyPoolDashboard or the website ("what if the app
   did X"). A to-do *about* the website is still a work task, not an idea. Files
   to `ideas.md`.
@@ -54,27 +64,43 @@ This creates `capture/work.md`, `capture/shopping.md`, `capture/ideas.md`,
 
 Read the message and pick the best-fit bucket. Rules of thumb:
 
-- Action + a person or deadline → **work**. ("Email the inspector by Friday.")
-- Something he'd put in a basket → **shopping**. ("We're out of chlorine.")
+- Action + it's job-related (a client, a coworker, an invoice, a work
+  deadline, an inspection) → **work_todo**. ("Email the inspector by Friday.")
+- Action that isn't job-related (an appointment, family, home) →
+  **personal_todo**. ("Book the dentist for Tuesday.")
+- Something he'd buy for work → **work_shopping**. ("Order more business
+  cards.")
+- Something he'd put in a basket for himself or the house →
+  **personal_shopping**. ("We're out of chlorine.")
 - A "what if" or feature thought → **ideas**. ("The app could flag overdue
   readings.")
 - Genuinely unclear, or two buckets fit equally → **inbox**.
 
-Extract details as you go: a due time for work tasks (convert "3pm tomorrow" to
-an ISO time like `2026-07-02T15:00`), a quantity for shopping, tags for ideas.
+"Work" means any professional/job task — it isn't limited to the pool
+business, so treat other job-related asks the same way.
+
+Extract details as you go: a due time for to-do items (convert "3pm tomorrow"
+to an ISO time like `2026-07-02T15:00`), a quantity and optional subcategory
+for shopping items (e.g. `pool`, `office`), tags for ideas.
 
 **Examples:**
 Input: `pick up two bags of chlorine tablets`
-→ shopping, item "chlorine tablets", quantity 2
+→ personal_shopping, item "chlorine tablets", quantity 2
+
+Input: `order more business cards for the shop`
+→ work_shopping, item "business cards"
 
 Input: `remind me to call the pool inspector at 3pm tomorrow`
-→ work, title "Call the pool inspector", due 3pm tomorrow (ISO), reminder needed
+→ work_todo, title "Call the pool inspector", due 3pm tomorrow (ISO), reminder needed
+
+Input: `book the dentist for next tuesday morning`
+→ personal_todo, title "Book the dentist", due next Tuesday (ISO), reminder needed
 
 Input: `what if MyPoolDashboard emailed staff when a reading is overdue`
 → ideas, title "Email staff when a reading is overdue"
 
 Input: `the thing we talked about earlier`
-→ inbox (too vague to place), suggested "work", low confidence
+→ inbox (too vague to place), suggested "work_todo", low confidence
 
 If you're ever torn, you can get a second opinion from the rule-based
 classifier (it's a rough hint, not a substitute for your judgement):
@@ -88,12 +114,19 @@ python3 scripts/classify.py --text "buy chlorine tablets"
 Once you've decided the bucket and fields, write it:
 
 ```bash
-# shopping
-python3 scripts/capture.py --bucket shopping --text "chlorine tablets" --qty 2
+# personal shopping
+python3 scripts/capture.py --bucket personal_shopping --text "chlorine tablets" --qty 2
 
-# work task with a due time
-python3 scripts/capture.py --bucket work --text "Call the pool inspector" \
+# work shopping
+python3 scripts/capture.py --bucket work_shopping --text "business cards" --qty 500
+
+# work to-do with a due time
+python3 scripts/capture.py --bucket work_todo --text "Call the pool inspector" \
     --due 2026-07-02T15:00 --priority high
+
+# personal to-do with a due time
+python3 scripts/capture.py --bucket personal_todo --text "Book the dentist" \
+    --due 2026-07-08T09:00
 
 # idea
 python3 scripts/capture.py --bucket ideas --text "Email staff on overdue reading" \
@@ -101,17 +134,19 @@ python3 scripts/capture.py --bucket ideas --text "Email staff on overdue reading
 
 # unclear
 python3 scripts/capture.py --bucket inbox --text "the thing we discussed" \
-    --confidence 0.3 --suggested work
+    --confidence 0.3 --suggested work_todo
 ```
 
 The script prints JSON with the stored `record`, a ready-to-send
 `confirmation`, and `reminder_needed`. **Always reply to Cormac with the
 confirmation** so he knows it landed and can correct fast — e.g. "Added to your
-shopping list ✅". Full field list is in `references/SCHEMAS.md`.
+personal shopping list ✅". Full field list is in `references/SCHEMAS.md`.
 
-## Reminders (work tasks with a due time)
+## Reminders (to-do items with a due time)
 
-When `capture.py` reports `reminder_needed: true`, run the reconcile loop:
+When `capture.py` reports `reminder_needed: true`, run the reconcile loop.
+This applies to both `work_todo` and `personal_todo` items — any open to-do
+with a due time earns a reminder, regardless of which of the two it's in.
 
 ```bash
 # 1. See what needs scheduling / cancelling
@@ -137,9 +172,9 @@ Cormac will fix your guesses in plain language. Identify which entry he means
 (by matching his words to a line), get its `id`, then:
 
 ```bash
-python3 scripts/correct.py --id x-20260702-0004 --move work    # wrong bucket
-python3 scripts/correct.py --id s-20260702-0001 --done         # "I bought that"
-python3 scripts/correct.py --id w-20260702-0002 --undone       # reopen
+python3 scripts/correct.py --id x-20260702-0004 --move work_todo    # wrong bucket
+python3 scripts/correct.py --id ps-20260702-0001 --done             # "I bought that"
+python3 scripts/correct.py --id wt-20260702-0002 --undone           # reopen
 ```
 
 Moving keeps the original capture time and drops fields that don't apply to the
@@ -149,10 +184,10 @@ reminder, run the reconcile loop again so the cron state stays honest.
 ## Reading things back
 
 ```bash
-python3 scripts/query.py --bucket shopping              # the shopping list
-python3 scripts/query.py --bucket work --due-within 7d  # tasks due this week
-python3 scripts/query.py --search inspector             # find across all buckets
-python3 scripts/query.py --bucket shopping --include-done
+python3 scripts/query.py --bucket personal_shopping           # the personal shopping list
+python3 scripts/query.py --bucket work_todo --due-within 7d   # work tasks due this week
+python3 scripts/query.py --search inspector                    # find across all buckets
+python3 scripts/query.py --bucket personal_shopping --include-done
 ```
 
 Output is clean text with no hidden metadata — relay it straight to Telegram.
@@ -163,6 +198,24 @@ Cormac enables Telegram's own voice transcription, so spoken notes reach you as
 text and you handle them exactly like typed ones. If a raw audio file ever
 arrives without a transcript, you can't read it — tell him so and ask him to
 resend as text or turn transcription on.
+
+## Migrating from the old layout
+
+The tool originally had four buckets (`work`, `shopping`, `ideas`, `inbox`).
+If this workspace still has `capture/work.md` or `capture/shopping.md`, run
+the migration once before doing anything else:
+
+```bash
+python3 scripts/migrate_v2_buckets.py            # see the plan (dry run)
+python3 scripts/migrate_v2_buckets.py --commit   # actually migrate
+```
+
+It renames `work.md` → `work_todo.md` and `shopping.md` →
+`personal_shopping.md`, remapping ids and `metadata.json` (including live
+`scheduled` reminders) to match, and creates empty `personal_todo.md` /
+`work_shopping.md`. The old files are backed up alongside as `*.v1.bak`, not
+deleted. `ideas.md` and `inbox.md` are untouched. It's a no-op if there's
+nothing to migrate. See `references/SCHEMAS.md` for details.
 
 ## When things go wrong
 
@@ -182,10 +235,11 @@ the sorting and the reminder plan:
 python3 scripts/bootstrap.py --root /tmp/test-capture
 python3 scripts/classify.py --text "buy chlorine tablets"
 # ...capture a few, then:
-python3 scripts/query.py --root /tmp/test-capture --bucket shopping
+python3 scripts/query.py --root /tmp/test-capture --bucket personal_shopping
 python3 scripts/reconcile_crons.py --root /tmp/test-capture
 ```
 
-Send one message per bucket in real Telegram — a task with a time, a shopping
-item, an idea, and something deliberately vague — and confirm the sorting,
-confirmations, and reminder all behave before trusting it day to day.
+Send one message per bucket in real Telegram — a work task, a personal task,
+a work shopping item, a personal shopping item, an idea, and something
+deliberately vague — and confirm the sorting, confirmations, and reminders all
+behave before trusting it day to day.

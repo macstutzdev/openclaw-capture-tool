@@ -10,6 +10,12 @@ This script exists for two narrower jobs:
   2. A tie-breaker hint — if Cindy is unsure, she can run this for a second
      opinion and a rough confidence number.
 
+Classification happens in two stages, kept separate for legibility:
+
+  1. TYPE — is this a to-do, a shopping item, or an idea?
+  2. DOMAIN — for a to-do or shopping item, is it work or personal? ("work"
+     means any professional/job task, not limited to the pool business.)
+
 Output: JSON {bucket, confidence, reasons}. Confidence is a rough 0–1 signal,
 not a calibrated probability. Low confidence should push borderline items to
 the inbox rather than a wrong bucket.
@@ -22,23 +28,43 @@ import argparse
 import json
 import re
 
-# Signal words per bucket. Kept deliberately small and legible — tune freely.
-SIGNALS = {
+# Stage 1 — what kind of thing is this? Kept deliberately small and legible —
+# tune freely.
+TYPE_SIGNALS = {
     "shopping": [
         "buy", "pick up", "pickup", "get some", "grocery", "groceries",
-        "milk", "eggs", "bread", "coffee", "we need", "run out of", "out of",
-        "restock", "order more", "shopping list",
+        "we need", "run out of", "out of", "restock", "order more",
+        "shopping list", "order", "purchase",
     ],
-    "work": [
+    "todo": [
         "call", "email", "send", "reply to", "follow up", "finish", "submit",
-        "deadline", "due", "meeting", "report", "invoice", "client", "schedule",
-        "deploy", "review", "fix", "inspector", "renew", "file the", "book a",
-        "chase", "sign off", "ping",
+        "deadline", "meeting", "schedule", "book", "chase",
+        "sign off", "ping", "remind me", "renew", "file the", "review",
+        "fix", "deploy",
     ],
     "ideas": [
         "idea", "what if", "wouldn't it be", "feature", "could we", "maybe the app",
-        "the app should", "add a", "concept", "brainstorm", "it would be cool",
-        "for the website", "for mypooldashboard", "dashboard could",
+        "the app should", "the app could", "add a", "concept", "brainstorm",
+        "it would be cool", "for the website", "for mypooldashboard",
+        "dashboard could",
+    ],
+}
+
+# Stage 2 — work or personal? "Work" is any professional/job task, not
+# limited to the pool business.
+DOMAIN_SIGNALS = {
+    "work": [
+        "client", "invoice", "boss", "coworker", "colleague", "office",
+        "meeting", "deadline", "project", "report", "inspector", "county",
+        "permit", "business", "company", "quarterly", "standup",
+        "presentation", "employer", "job", "shift", "conference call",
+        "expense", "vendor", "work",
+    ],
+    "personal": [
+        "mom", "dad", "family", "home", "kids", "dentist", "doctor", "vet",
+        "haircut", "gym", "birthday", "anniversary", "spouse", "wife",
+        "husband", "myself", "personal", "rent", "grocery", "groceries",
+        "milk", "eggs", "bread", "coffee", "house", "car service", "school",
     ],
 }
 
@@ -51,18 +77,23 @@ _TIME_HINT = re.compile(
 )
 
 
+def _score(text, signals):
+    scores = {k: 0 for k in signals}
+    hits = {k: [] for k in signals}
+    for key, words in signals.items():
+        for w in words:
+            if w in text:
+                scores[key] += 1
+                hits[key].append(w)
+    return scores, hits
+
+
 def classify(text):
     t = text.lower()
-    scores = {b: 0 for b in SIGNALS}
-    hits = {b: [] for b in SIGNALS}
-    for bucket, words in SIGNALS.items():
-        for w in words:
-            if w in t:
-                scores[bucket] += 1
-                hits[bucket].append(w)
 
-    best = max(scores, key=scores.get)
-    top = scores[best]
+    type_scores, type_hits = _score(t, TYPE_SIGNALS)
+    best_type = max(type_scores, key=type_scores.get)
+    top = type_scores[best_type]
 
     if top == 0:
         return {
@@ -71,23 +102,41 @@ def classify(text):
             "reasons": ["no clear signal words matched"],
         }
 
-    # Confidence rises with how decisively one bucket wins.
-    ordered = sorted(scores.values(), reverse=True)
+    ordered = sorted(type_scores.values(), reverse=True)
     margin = ordered[0] - (ordered[1] if len(ordered) > 1 else 0)
-    confidence = min(0.95, 0.5 + 0.15 * top + 0.1 * margin)
 
-    # A tie between buckets is a signal to be cautious.
-    if margin == 0 and top > 0:
+    if margin == 0:
         return {
             "bucket": "inbox",
             "confidence": 0.35,
-            "reasons": [f"tie between {', '.join(b for b in scores if scores[b] == top)}"],
+            "reasons": [f"tie between {', '.join(k for k in type_scores if type_scores[k] == top)}"],
         }
 
-    reasons = [f"matched {best} words: {', '.join(hits[best])}"]
-    if _TIME_HINT.search(text):
+    confidence = min(0.95, 0.5 + 0.15 * top + 0.1 * margin)
+    reasons = [f"matched {best_type} words: {', '.join(type_hits[best_type])}"]
+    if best_type == "todo" and _TIME_HINT.search(text):
         reasons.append("a due time seems present")
-    return {"bucket": best, "confidence": round(confidence, 2), "reasons": reasons}
+
+    if best_type == "ideas":
+        return {"bucket": "ideas", "confidence": round(confidence, 2), "reasons": reasons}
+
+    # Stage 2: which domain — work or personal? Ties (including no signal at
+    # all) default to personal, since most everyday captures ("buy milk",
+    # "call the plumber") carry no business cue and are personal by default.
+    domain_scores, domain_hits = _score(t, DOMAIN_SIGNALS)
+    if domain_scores["work"] > domain_scores["personal"]:
+        domain = "work"
+        reasons.append(f"matched work words: {', '.join(domain_hits['work'])}")
+    else:
+        domain = "personal"
+        confidence = min(confidence, 0.7)  # default guess, so cap confidence
+        if domain_scores["personal"] > 0:
+            reasons.append(f"matched personal words: {', '.join(domain_hits['personal'])}")
+        else:
+            reasons.append("no domain words matched — defaulting to personal")
+
+    bucket = f"{domain}_{best_type}"
+    return {"bucket": bucket, "confidence": round(confidence, 2), "reasons": reasons}
 
 
 def main():

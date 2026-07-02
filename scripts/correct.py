@@ -7,9 +7,9 @@ calls this script to make the edit safely. Working by id avoids editing the
 wrong line when two entries look similar.
 
 Examples:
-    python3 correct.py --id x-20260701-0002 --move work
-    python3 correct.py --id s-20260701-0005 --done
-    python3 correct.py --id w-20260701-0001 --undone
+    python3 correct.py --id x-20260701-0002 --move work_todo
+    python3 correct.py --id ps-20260701-0005 --done
+    python3 correct.py --id wt-20260701-0001 --undone
 """
 
 import argparse
@@ -34,9 +34,9 @@ def move_record(record, target):
     text = (record.get("title") or record.get("item")
             or record.get("raw_input") or "")
     fields = {}
-    if target == "work":
+    if target in lib.TODO_BUCKETS:
         fields = {"title": text, "priority": "normal", "status": "open"}
-    elif target == "shopping":
+    elif target in lib.SHOPPING_BUCKETS:
         fields = {"item": text, "status": "open"}
     elif target == "ideas":
         fields = {"title": text, "status": "open"}

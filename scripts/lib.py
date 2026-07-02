@@ -14,15 +14,33 @@ import os
 import re
 from datetime import datetime, timezone
 
-BUCKETS = ("work", "shopping", "ideas", "inbox")
+BUCKETS = (
+    "work_todo", "personal_todo", "work_shopping", "personal_shopping",
+    "ideas", "inbox",
+)
+
+# The two todo-style buckets share a schema (title/due_time/priority/status)
+# and both participate in reminders. The two shopping-style buckets share a
+# different schema (item/quantity/category/urgency/status). Scripts that need
+# to treat "any todo" or "any shopping" uniformly should loop over these.
+TODO_BUCKETS = ("work_todo", "personal_todo")
+SHOPPING_BUCKETS = ("work_shopping", "personal_shopping")
 
 # The visible header at the top of each file. parse_entries skips any line
 # that has no structured record, so headers are ignored automatically.
 HEADERS = {
-    "work": "# Work tasks\n\n",
-    "shopping": "# Shopping\n\n",
+    "work_todo": "# Work to-do\n\n",
+    "personal_todo": "# Personal to-do\n\n",
+    "work_shopping": "# Work shopping\n\n",
+    "personal_shopping": "# Personal shopping\n\n",
     "ideas": "# Website ideas (MyPoolDashboard)\n\n",
     "inbox": "# Inbox (unsorted / unclear)\n\n",
+}
+
+_ID_PREFIX = {
+    "work_todo": "wt", "personal_todo": "pt",
+    "work_shopping": "ws", "personal_shopping": "ps",
+    "ideas": "i", "inbox": "x",
 }
 
 _COMMENT_RE = re.compile(r"<!--(\{.*\})-->\s*$")
@@ -93,8 +111,7 @@ def next_id(root, bucket):
     meta["counters"][bucket] = meta["counters"].get(bucket, 0) + 1
     n = meta["counters"][bucket]
     save_metadata(root, meta)
-    prefix = {"work": "w", "shopping": "s", "ideas": "i", "inbox": "x"}[bucket]
-    return f"{prefix}-{datetime.now().strftime('%Y%m%d')}-{n:04d}"
+    return f"{_ID_PREFIX[bucket]}-{datetime.now().strftime('%Y%m%d')}-{n:04d}"
 
 
 # ---------- entry formatting ----------
@@ -113,7 +130,7 @@ def _fmt_due(due_time):
 def visible_text(record):
     """Build the human-facing part of a line from a record."""
     b = record["bucket"]
-    if b == "work":
+    if b in TODO_BUCKETS:
         box = "x" if record.get("status") == "done" else " "
         line = f"- [{box}] {record['title']}"
         bits = []
@@ -124,11 +141,13 @@ def visible_text(record):
         if bits:
             line += f" ({', '.join(bits)})"
         return line
-    if b == "shopping":
+    if b in SHOPPING_BUCKETS:
         box = "x" if record.get("status") == "done" else " "
         line = f"- [{box}] {record['item']}"
         if record.get("quantity"):
             line += f" ×{record['quantity']}"
+        if record.get("category"):
+            line += f"  [{record['category']}]"
         return line
     if b == "ideas":
         line = f"- {record['title']}"

@@ -2,11 +2,16 @@
 # Expected bucket in the comment. Feed these to classify.py or capture.py to
 # sanity-check sorting behaviour.
 
-pick up two bags of chlorine tablets            # shopping
-we're out of coffee                             # shopping
-remind me to call the pool inspector at 3pm tomorrow   # work (+ reminder)
-email the county about the permit renewal by friday    # work (+ reminder)
-finish the Q3 facility report                   # work
+pick up two bags of chlorine tablets            # personal_shopping
+we're out of coffee                             # personal_shopping
+order more business cards for the shop          # work_shopping
+pick up printer ink for the office              # work_shopping
+remind me to call the pool inspector at 3pm tomorrow   # work_todo (+ reminder)
+email the county about the permit renewal by friday    # work_todo (+ reminder)
+finish the Q3 facility report                   # work_todo
+book the dentist for next tuesday morning       # personal_todo (+ reminder)
+pick mom up from the airport at 6pm friday      # personal_todo (+ reminder)
+renew my passport                               # personal_todo
 what if MyPoolDashboard emailed staff when a reading is overdue   # ideas
 idea: a mobile view for poolside chemical logging      # ideas
 the app could show a compliance score per facility     # ideas

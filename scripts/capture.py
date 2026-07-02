@@ -9,13 +9,16 @@ It prints back the stored record and a ready-to-send confirmation message so
 Cindy can reply to Cormac immediately.
 
 Examples:
-    python3 capture.py --bucket shopping --text "chlorine tablets" --qty 2
-    python3 capture.py --bucket work --text "Call the pool inspector" \
+    python3 capture.py --bucket personal_shopping --text "chlorine tablets" --qty 2
+    python3 capture.py --bucket work_shopping --text "printer ink" --qty 1
+    python3 capture.py --bucket work_todo --text "Call the pool inspector" \
         --due 2026-07-01T15:00 --priority high
+    python3 capture.py --bucket personal_todo --text "Book the dentist" \
+        --due 2026-07-03T09:00
     python3 capture.py --bucket ideas --text "Photo upload for test logs" \
         --description "let staff attach a photo to each reading" --tags ui,logging
     python3 capture.py --bucket inbox --text "the thing about the thing" \
-        --confidence 0.3 --suggested work
+        --confidence 0.3 --suggested work_todo
 """
 
 import argparse
@@ -26,8 +29,10 @@ import lib
 
 
 CONFIRM = {
-    "work": "Added to your work tasks ✅",
-    "shopping": "Added to your shopping list ✅",
+    "work_todo": "Added to your work to-do list ✅",
+    "personal_todo": "Added to your personal to-do list ✅",
+    "work_shopping": "Added to your work shopping list ✅",
+    "personal_shopping": "Added to your personal shopping list ✅",
     "ideas": "Filed under website ideas ✅",
     "inbox": "Put this in your inbox — wasn't sure where it fits ✅",
 }
@@ -35,12 +40,12 @@ CONFIRM = {
 
 def build_record(args):
     b = args.bucket
-    if b == "work":
+    if b in lib.TODO_BUCKETS:
         return lib.new_record(
             b, title=args.text, due_time=args.due,
             priority=args.priority or "normal", status="open", notes=args.notes,
         )
-    if b == "shopping":
+    if b in lib.SHOPPING_BUCKETS:
         return lib.new_record(
             b, item=args.text, quantity=args.qty, category=args.category,
             urgency=args.urgency, status="open",
@@ -83,7 +88,7 @@ def main():
         print(json.dumps({"ok": False, "error": str(e)}))
         sys.exit(1)
 
-    reminder_needed = bool(args.bucket == "work" and args.due)
+    reminder_needed = bool(args.bucket in lib.TODO_BUCKETS and args.due)
     print(json.dumps({
         "ok": True,
         "record": record,
