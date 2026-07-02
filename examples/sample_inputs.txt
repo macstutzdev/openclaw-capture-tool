@@ -1,0 +1,14 @@
+# Sample capture messages for testing — one per line.
+# Expected bucket in the comment. Feed these to classify.py or capture.py to
+# sanity-check sorting behaviour.
+
+pick up two bags of chlorine tablets            # shopping
+we're out of coffee                             # shopping
+remind me to call the pool inspector at 3pm tomorrow   # work (+ reminder)
+email the county about the permit renewal by friday    # work (+ reminder)
+finish the Q3 facility report                   # work
+what if MyPoolDashboard emailed staff when a reading is overdue   # ideas
+idea: a mobile view for poolside chemical logging      # ideas
+the app could show a compliance score per facility     # ideas
+the thing we talked about earlier               # inbox (too vague)
+follow up on that                               # inbox (too vague)
