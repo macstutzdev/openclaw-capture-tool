@@ -12,8 +12,10 @@ finish the Q3 facility report                   # work_todo
 book the dentist for next tuesday morning       # personal_todo (+ reminder)
 pick mom up from the airport at 6pm friday      # personal_todo (+ reminder)
 renew my passport                               # personal_todo
-what if MyPoolDashboard emailed staff when a reading is overdue   # ideas
-idea: a mobile view for poolside chemical logging      # ideas
-the app could show a compliance score per facility     # ideas
+what if MyPoolDashboard emailed staff when a reading is overdue   # mypooldash/idea
+idea: a mobile view for poolside chemical logging      # mypooldash/idea
+the app could show a compliance score per facility     # mypooldash/idea
+the login form on mypooldashboard 500s on mobile safari   # mypooldash/bug
+fix the login bug on the dashboard by friday            # mypooldash/todo (+ reminder)
 the thing we talked about earlier               # inbox (too vague)
 follow up on that                               # inbox (too vague)

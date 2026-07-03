@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 BUCKETS = (
     "work_todo", "personal_todo", "work_shopping", "personal_shopping",
-    "ideas", "inbox",
+    "mypooldash", "inbox",
 )
 
 # The two todo-style buckets share a schema (title/due_time/priority/status)
@@ -33,14 +33,14 @@ HEADERS = {
     "personal_todo": "# Personal to-do\n\n",
     "work_shopping": "# Work shopping\n\n",
     "personal_shopping": "# Personal shopping\n\n",
-    "ideas": "# Website ideas (MyPoolDashboard)\n\n",
+    "mypooldash": "# MyPoolDashboard (ideas, to-dos, bugs)\n\n",
     "inbox": "# Inbox (unsorted / unclear)\n\n",
 }
 
 _ID_PREFIX = {
     "work_todo": "wt", "personal_todo": "pt",
     "work_shopping": "ws", "personal_shopping": "ps",
-    "ideas": "i", "inbox": "x",
+    "mypooldash": "mpd", "inbox": "x",
 }
 
 _COMMENT_RE = re.compile(r"<!--(\{.*\})-->\s*$")
@@ -149,8 +149,17 @@ def visible_text(record):
         if record.get("category"):
             line += f"  [{record['category']}]"
         return line
-    if b == "ideas":
-        line = f"- {record['title']}"
+    if b == "mypooldash":
+        kind = record.get("type", "idea")
+        box = "x" if record.get("status") == "done" else " "
+        line = f"- [{box}] [{kind}] {record['title']}"
+        bits = []
+        if kind == "todo" and record.get("due_time"):
+            bits.append(f"due {_fmt_due(record['due_time'])}")
+        if kind == "todo" and record.get("priority") and record["priority"] != "normal":
+            bits.append(record["priority"])
+        if bits:
+            line += f" ({', '.join(bits)})"
         if record.get("description"):
             line += f" — {record['description']}"
         if record.get("tags"):
@@ -206,3 +215,23 @@ def new_record(bucket, **fields):
     rec = {"bucket": bucket, "created_at": now_iso()}
     rec.update({k: v for k, v in fields.items() if v is not None})
     return rec
+
+
+def reminds(bucket, record):
+    """Whether a record participates in the reminder system: either of the
+    two todo buckets, or a mypooldash entry filed with type "todo"."""
+    if bucket in TODO_BUCKETS:
+        return True
+    return bucket == "mypooldash" and record.get("type") == "todo"
+
+
+def all_remindable_entries(root):
+    """id -> record, across every bucket that can carry a due_time reminder."""
+    tasks = {}
+    for b in TODO_BUCKETS:
+        for r in read_entries(root, b):
+            tasks[r["id"]] = r
+    for r in read_entries(root, "mypooldash"):
+        if r.get("type") == "todo":
+            tasks[r["id"]] = r
+    return tasks

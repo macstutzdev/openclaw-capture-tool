@@ -38,8 +38,17 @@ def move_record(record, target):
         fields = {"title": text, "priority": "normal", "status": "open"}
     elif target in lib.SHOPPING_BUCKETS:
         fields = {"item": text, "status": "open"}
-    elif target == "ideas":
-        fields = {"title": text, "status": "open"}
+    elif target == "mypooldash":
+        # Coming from a todo bucket with a due time carries over as a
+        # mypooldash to-do; otherwise it lands as a plain idea.
+        if record.get("due_time"):
+            fields = {"title": text, "type": "todo",
+                      "due_time": record["due_time"],
+                      "priority": record.get("priority", "normal"),
+                      "status": "open"}
+        else:
+            fields = {"title": text, "type": record.get("type", "idea"),
+                      "status": "open"}
     else:
         fields = {"raw_input": text}
     new = lib.new_record(target, **fields)

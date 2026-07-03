@@ -1,7 +1,7 @@
 ---
 name: capture-tool
-description: Personal capture-and-organize tool driven over Telegram. Use whenever Cormac sends something to remember, do, buy, or note down (a task, errand, shopping item, or MyPoolDashboard website idea) rather than a question or conversation. Sort it into one of six buckets — work to-do, personal to-do, work shopping, personal shopping, ideas, inbox — append to a local markdown file, confirm what was filed, and schedule a Telegram reminder for any to-do item (work or personal) with a due time. Also use when he asks to review, search, correct, or complete items such as "show my shopping list", "move that to work", "I bought the chlorine", or "what's due this week". When unsure whether a message is a capture, treat it as one.
-version: 2.0
+description: Personal capture-and-organize tool driven over Telegram. Use whenever Cormac sends something to remember, do, buy, or note down (a task, errand, shopping item, or something about his MyPoolDashboard project) rather than a question or conversation. Sort it into one of six buckets — work to-do, personal to-do, work shopping, personal shopping, mypooldash (ideas/to-dos/bugs for the project), inbox — append to a local markdown file, confirm what was filed, and schedule a Telegram reminder for any to-do item with a due time (work, personal, or mypooldash). Also use when he asks to review, search, correct, or complete items such as "show my shopping list", "move that to work", "I bought the chlorine", or "what's due this week". When unsure whether a message is a capture, treat it as one.
+version: 3.0
 ---
 
 # Capture Tool
@@ -36,12 +36,13 @@ python3 scripts/bootstrap.py
 ```
 
 This creates `capture/work_todo.md`, `capture/personal_todo.md`,
-`capture/work_shopping.md`, `capture/personal_shopping.md`, `capture/ideas.md`,
-`capture/inbox.md`, and `capture/metadata.json`.
+`capture/work_shopping.md`, `capture/personal_shopping.md`,
+`capture/mypooldash.md`, `capture/inbox.md`, and `capture/metadata.json`.
 
 If this workspace was set up with the old four-bucket layout (`work.md`,
 `shopping.md`), run the one-time migration first instead — see "Migrating
-from the old layout" below.
+from the old layout" below. If it has an older `ideas.md` instead of
+`mypooldash.md`, see "Migrating from the v2 layout" further down.
 
 ## The six buckets
 
@@ -53,9 +54,11 @@ from the old layout" below.
 - **work_shopping** — something to buy for work. Files to `work_shopping.md`.
 - **personal_shopping** — something to buy for himself or the household.
   Files to `personal_shopping.md`.
-- **ideas** — a *concept* for MyPoolDashboard or the website ("what if the app
-  did X"). A to-do *about* the website is still a work task, not an idea. Files
-  to `ideas.md`.
+- **mypooldash** — anything about the MyPoolDashboard project: a feature
+  *idea* ("what if the app did X"), a *to-do* for the project (a dev task, a
+  deploy, a piece of copy to write), or a *bug* report. Files to
+  `mypooldash.md` with a `type` of `idea` / `todo` / `bug`. A to-do here still
+  gets a reminder if it has a due time, exactly like work_todo/personal_todo.
 - **inbox** — anything that doesn't clearly fit, or where you genuinely aren't
   sure. Files to `inbox.md`. This is the safety net — use it rather than forcing
   a bad guess.
@@ -72,16 +75,30 @@ Read the message and pick the best-fit bucket. Rules of thumb:
   cards.")
 - Something he'd put in a basket for himself or the house →
   **personal_shopping**. ("We're out of chlorine.")
-- A "what if" or feature thought → **ideas**. ("The app could flag overdue
-  readings.")
+- Anything about the MyPoolDashboard project → **mypooldash**, and pick a
+  `type`:
+  - A "what if" or feature thought → `type: idea`. ("The app could flag
+    overdue readings.")
+  - A concrete task for the project, with or without a due time → `type:
+    todo`. ("Fix the login bug by Friday", "write the onboarding copy for the
+    dashboard.") This is still MyPoolDashboard work, so it goes here rather
+    than work_todo even though it's job-related.
+  - Something broken → `type: bug`. ("The login form 500s on mobile
+    Safari.")
 - Genuinely unclear, or two buckets fit equally → **inbox**.
 
 "Work" means any professional/job task — it isn't limited to the pool
-business, so treat other job-related asks the same way.
+business, so treat other job-related asks the same way. **mypooldash takes
+priority over every other bucket for anything project-related** — if a
+message is about MyPoolDashboard, it goes to mypooldash instead of work_todo
+even though it's job-related, and instead of the inbox even if you're unsure
+which `type` fits (default to `idea` in that case, the safest guess, rather
+than parking it in the inbox).
 
 Extract details as you go: a due time for to-do items (convert "3pm tomorrow"
-to an ISO time like `2026-07-02T15:00`), a quantity and optional subcategory
-for shopping items (e.g. `pool`, `office`), tags for ideas.
+to an ISO time like `2026-07-02T15:00`) — this applies to mypooldash `todo`
+entries too — a quantity and optional subcategory for shopping items (e.g.
+`pool`, `office`), tags for mypooldash entries.
 
 **Examples:**
 Input: `pick up two bags of chlorine tablets`
@@ -97,7 +114,13 @@ Input: `book the dentist for next tuesday morning`
 → personal_todo, title "Book the dentist", due next Tuesday (ISO), reminder needed
 
 Input: `what if MyPoolDashboard emailed staff when a reading is overdue`
-→ ideas, title "Email staff when a reading is overdue"
+→ mypooldash, type "idea", title "Email staff when a reading is overdue"
+
+Input: `the login form on mypooldashboard 500s on mobile safari`
+→ mypooldash, type "bug", title "Login form 500s on mobile Safari"
+
+Input: `fix the login bug on the dashboard by friday`
+→ mypooldash, type "todo", title "Fix the login bug", due Friday (ISO), reminder needed
 
 Input: `the thing we talked about earlier`
 → inbox (too vague to place), suggested "work_todo", low confidence
@@ -128,9 +151,18 @@ python3 scripts/capture.py --bucket work_todo --text "Call the pool inspector" \
 python3 scripts/capture.py --bucket personal_todo --text "Book the dentist" \
     --due 2026-07-08T09:00
 
-# idea
-python3 scripts/capture.py --bucket ideas --text "Email staff on overdue reading" \
+# mypooldash idea
+python3 scripts/capture.py --bucket mypooldash --type idea \
+    --text "Email staff on overdue reading" \
     --description "auto-email when a log is late" --tags alerts,staff
+
+# mypooldash bug
+python3 scripts/capture.py --bucket mypooldash --type bug \
+    --text "Login form 500s on mobile Safari"
+
+# mypooldash to-do with a due time
+python3 scripts/capture.py --bucket mypooldash --type todo \
+    --text "Fix the login bug" --due 2026-07-04T17:00 --priority high
 
 # unclear
 python3 scripts/capture.py --bucket inbox --text "the thing we discussed" \
@@ -145,8 +177,9 @@ personal shopping list ✅". Full field list is in `references/SCHEMAS.md`.
 ## Reminders (to-do items with a due time)
 
 When `capture.py` reports `reminder_needed: true`, run the reconcile loop.
-This applies to both `work_todo` and `personal_todo` items — any open to-do
-with a due time earns a reminder, regardless of which of the two it's in.
+This applies to `work_todo` and `personal_todo` items, and to `mypooldash`
+entries filed with `type: todo` — any open to-do with a due time earns a
+reminder, regardless of which bucket it's in.
 
 ```bash
 # 1. See what needs scheduling / cancelling
@@ -217,6 +250,21 @@ It renames `work.md` → `work_todo.md` and `shopping.md` →
 deleted. `ideas.md` and `inbox.md` are untouched. It's a no-op if there's
 nothing to migrate. See `references/SCHEMAS.md` for details.
 
+## Migrating from the v2 layout
+
+If this workspace still has `capture/ideas.md` instead of
+`capture/mypooldash.md`, run the v3 migration once:
+
+```bash
+python3 scripts/migrate_v3_mypooldash.py            # see the plan (dry run)
+python3 scripts/migrate_v3_mypooldash.py --commit   # actually migrate
+```
+
+It renames `ideas.md` → `mypooldash.md`, remapping ids (`i-` → `mpd-`) and
+`metadata.json` counters, tagging every migrated record `"type": "idea"`. The
+old file is backed up as `ideas.md.v2.bak`, not deleted. It's a no-op if
+there's nothing to migrate.
+
 ## When things go wrong
 
 - Scripts print `{"ok": false, "error": ...}` and exit non-zero on failure.
@@ -240,6 +288,6 @@ python3 scripts/reconcile_crons.py --root /tmp/test-capture
 ```
 
 Send one message per bucket in real Telegram — a work task, a personal task,
-a work shopping item, a personal shopping item, an idea, and something
-deliberately vague — and confirm the sorting, confirmations, and reminders all
-behave before trusting it day to day.
+a work shopping item, a personal shopping item, a MyPoolDashboard idea/todo/bug,
+and something deliberately vague — and confirm the sorting, confirmations, and
+reminders all behave before trusting it day to day.

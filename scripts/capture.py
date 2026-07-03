@@ -15,8 +15,11 @@ Examples:
         --due 2026-07-01T15:00 --priority high
     python3 capture.py --bucket personal_todo --text "Book the dentist" \
         --due 2026-07-03T09:00
-    python3 capture.py --bucket ideas --text "Photo upload for test logs" \
+    python3 capture.py --bucket mypooldash --type idea --text "Photo upload for test logs" \
         --description "let staff attach a photo to each reading" --tags ui,logging
+    python3 capture.py --bucket mypooldash --type bug --text "Login form 500s on mobile Safari"
+    python3 capture.py --bucket mypooldash --type todo --text "Fix the login bug" \
+        --due 2026-07-03T09:00 --priority high
     python3 capture.py --bucket inbox --text "the thing about the thing" \
         --confidence 0.3 --suggested work_todo
 """
@@ -33,7 +36,7 @@ CONFIRM = {
     "personal_todo": "Added to your personal to-do list ✅",
     "work_shopping": "Added to your work shopping list ✅",
     "personal_shopping": "Added to your personal shopping list ✅",
-    "ideas": "Filed under website ideas ✅",
+    "mypooldash": "Filed under MyPoolDashboard ✅",
     "inbox": "Put this in your inbox — wasn't sure where it fits ✅",
 }
 
@@ -50,12 +53,14 @@ def build_record(args):
             b, item=args.text, quantity=args.qty, category=args.category,
             urgency=args.urgency, status="open",
         )
-    if b == "ideas":
+    if b == "mypooldash":
         tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-        return lib.new_record(
-            b, title=args.text, description=args.description,
-            tags=tags, status="open",
-        )
+        kind = args.type or "idea"
+        fields = dict(title=args.text, type=kind, description=args.description,
+                      tags=tags, status="open")
+        if kind == "todo":
+            fields.update(due_time=args.due, priority=args.priority or "normal")
+        return lib.new_record(b, **fields)
     # inbox
     return lib.new_record(
         b, raw_input=args.text, confidence_score=args.confidence,
@@ -75,6 +80,8 @@ def main():
     ap.add_argument("--urgency", choices=["low", "normal", "high"])
     ap.add_argument("--description")
     ap.add_argument("--tags", help="comma-separated")
+    ap.add_argument("--type", choices=["idea", "todo", "bug"],
+                     help="mypooldash: what kind of entry this is (default idea)")
     ap.add_argument("--confidence", type=float, help="inbox: 0–1 classifier confidence")
     ap.add_argument("--suggested", choices=lib.BUCKETS, help="inbox: best-guess bucket")
     ap.add_argument("--notes")
@@ -88,7 +95,7 @@ def main():
         print(json.dumps({"ok": False, "error": str(e)}))
         sys.exit(1)
 
-    reminder_needed = bool(args.bucket in lib.TODO_BUCKETS and args.due)
+    reminder_needed = lib.reminds(args.bucket, record) and bool(args.due)
     print(json.dumps({
         "ok": True,
         "record": record,

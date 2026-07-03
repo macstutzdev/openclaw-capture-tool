@@ -1,7 +1,7 @@
 # capture-tool
 
 An OpenClaw skill that turns your agent into a personal dictaphone. Send it
-things to remember over Telegram — tasks, shopping, website ideas — and it
+things to remember over Telegram — tasks, shopping, MyPoolDashboard ideas/bugs/todos — and it
 sorts each one into a bucket, files it to a local markdown list, confirms what
 it did, and sets a Telegram reminder for any task with a due time. Everything
 stays inside your OpenClaw workspace; nothing is pushed to outside apps.
