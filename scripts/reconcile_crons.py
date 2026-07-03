@@ -14,10 +14,12 @@ The loop Cindy follows:
     2. create / cancel the jobs with the cron tool
     3. python3 reconcile_crons.py --commit         # record the new state
 
-A task earns a reminder when it is in work_todo.md, personal_todo.md, or is a
-mypooldash entry with type "todo", still open, and has a due_time in the
-future. A previously-scheduled reminder is cancelled when its task is gone,
-marked done, or its due time has passed.
+A task earns reminders when it is in work_todo.md, personal_todo.md, or is a
+mypooldash entry with type "todo", still open, and has reminder_times in the
+future. Older records without reminder_times fall back to a single reminder at
+due_time. A previously-scheduled reminder is cancelled when its task is gone,
+leaves open status, removed from reminder_times, or its reminder time has
+passed.
 """
 
 import argparse
@@ -34,6 +36,52 @@ def _parse_dt(s):
         return None
 
 
+def _as_local(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.astimezone()
+    return dt
+
+
+def _short_dt(s):
+    dt = _as_local(_parse_dt(s))
+    if dt is None:
+        return s
+    hour = dt.hour % 12 or 12
+    minute = f":{dt.minute:02d}" if dt.minute else ""
+    ampm = "am" if dt.hour < 12 else "pm"
+    return f"{dt.strftime('%a')}, {dt.month}/{dt.day} @ {hour}{minute}{ampm}"
+
+
+def _reminder_message(record):
+    due = record.get("due_time")
+    suffix = f" (due {_short_dt(due)})" if due else ""
+    return f"⏰ Reminder: {record['title']}{suffix}"
+
+
+def _reminder_times(record):
+    times = record.get("reminder_times")
+    if isinstance(times, list):
+        return [t for t in times if t]
+    if isinstance(times, str):
+        return [times]
+    due = record.get("due_time")
+    return [due] if due else []
+
+
+def _reminder_id(task_id, index, total):
+    return task_id if total == 1 else f"{task_id}::r{index + 1}"
+
+
+def _task_id_from_schedule(reminder_id, info):
+    return info.get("task_id") or reminder_id.split("::", 1)[0]
+
+
+def _reminder_time_from_schedule(info):
+    return info.get("reminder_time") or info.get("due_time")
+
+
 def build_plan(root):
     now = datetime.now().astimezone()
     meta = lib.load_metadata(root)
@@ -41,28 +89,37 @@ def build_plan(root):
 
     tasks = lib.all_remindable_entries(root)
     to_schedule, to_cancel = [], []
+    active_reminder_ids = set()
 
     # New reminders needed.
     for tid, rec in tasks.items():
-        due = _parse_dt(rec.get("due_time", ""))
-        if not due:
-            continue
-        if due.tzinfo is None:
-            due = due.astimezone()
-        if rec.get("status") == "open" and due > now and tid not in scheduled:
+        reminder_times = _reminder_times(rec)
+        total = len(reminder_times)
+        for index, reminder_time in enumerate(reminder_times):
+            reminder_at = _as_local(_parse_dt(reminder_time))
+            if not reminder_at:
+                continue
+            rid = _reminder_id(tid, index, total)
+            active_reminder_ids.add(rid)
+            if rec.get("status") != "open" or reminder_at <= now or rid in scheduled:
+                continue
             to_schedule.append({
-                "id": tid,
-                "due_time": rec["due_time"],
-                "message": f"⏰ Reminder: {rec['title']}",
+                "id": rid,
+                "task_id": tid,
+                "reminder_time": reminder_time,
+                "due_time": rec.get("due_time"),
+                "message": _reminder_message(rec),
             })
 
     # Reminders that no longer apply.
-    for tid, info in scheduled.items():
+    for rid, info in scheduled.items():
+        tid = _task_id_from_schedule(rid, info)
         rec = tasks.get(tid)
-        due = _parse_dt(info.get("due_time", ""))
-        past = due is not None and (due.astimezone() if due.tzinfo is None else due) <= now
-        if rec is None or rec.get("status") == "done" or past:
-            to_cancel.append({"id": tid, "cron_note": info.get("cron_note")})
+        reminder_at = _as_local(_parse_dt(_reminder_time_from_schedule(info)))
+        past = reminder_at is not None and reminder_at <= now
+        stale = rid not in active_reminder_ids
+        if rec is None or rec.get("status", "open") != "open" or past or stale:
+            to_cancel.append({"id": rid, "task_id": tid, "cron_note": info.get("cron_note")})
 
     return meta, {"to_schedule": to_schedule, "to_cancel": to_cancel}
 
@@ -71,6 +128,8 @@ def commit(root, meta, plan):
     scheduled = meta["scheduled"]
     for item in plan["to_schedule"]:
         scheduled[item["id"]] = {
+            "task_id": item["task_id"],
+            "reminder_time": item["reminder_time"],
             "due_time": item["due_time"],
             "message": item["message"],
             "cron_note": item.get("cron_note"),

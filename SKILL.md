@@ -1,7 +1,7 @@
 ---
 name: capture-tool
-description: Personal capture-and-organize tool driven over Telegram. Use whenever Cormac sends something to remember, do, buy, or note down (a task, errand, shopping item, or something about his MyPoolDashboard project) rather than a question or conversation. Sort it into one of six buckets — work to-do, personal to-do, work shopping, personal shopping, mypooldash (ideas/to-dos/bugs for the project), inbox — append to a local markdown file, confirm what was filed, and schedule a Telegram reminder for any to-do item with a due time (work, personal, or mypooldash). Also use when he asks to review, search, correct, or complete items such as "show my shopping list", "move that to work", "I bought the chlorine", or "what's due this week". When unsure whether a message is a capture, treat it as one.
-version: 3.0
+description: Personal capture, review, and follow-through tool driven over Telegram. Use whenever Cormac sends something to remember, do, buy, review, clean up, defer, delegate, or note down (a task, errand, shopping item, or something about his MyPoolDashboard project) rather than a question or conversation. Sort captures into one of six buckets — work to-do, personal to-do, work shopping, personal shopping, mypooldash (ideas/to-dos/bugs for the project), inbox — append to a local markdown file, confirm what was filed, schedule judged Telegram reminders for time-sensitive to-dos, enrich items with useful tags/urgency/duplicate checks, and support reviews such as "plan my day", "what's stale", "clear my inbox", "mark that waiting on Alex", or "what's due this week". When unsure whether a message is a capture or cleanup command, treat it as one.
+version: 4.0
 ---
 
 # Capture Tool
@@ -18,7 +18,8 @@ work. Keep this split clear:
 - **You decide** which bucket a message belongs to and pull out any details
   (a due time, a quantity, tags). This is judgement, and it's your strength.
 - **The scripts handle** building the record, writing it safely, tracking ids,
-  and working out which reminders should exist. They never guess the bucket.
+  working out which reminders should exist, generating review briefs, and
+  suggesting enrichment. They never guess the bucket.
 - **Your tools handle** the two things scripts can't reach: sending Telegram
   messages and creating cron jobs. The reminder script hands you a *plan*; you
   carry it out with your cron tool.
@@ -96,9 +97,47 @@ which `type` fits (default to `idea` in that case, the safest guess, rather
 than parking it in the inbox).
 
 Extract details as you go: a due time for to-do items (convert "3pm tomorrow"
-to an ISO time like `2026-07-02T15:00`) — this applies to mypooldash `todo`
-entries too — a quantity and optional subcategory for shopping items (e.g.
-`pool`, `office`), tags for mypooldash entries.
+to an ISO time like `2026-07-02T15:00-04:00`) — this applies to mypooldash
+`todo` entries too — plus one or more reminder times, a quantity and optional
+subcategory for shopping items (e.g. `pool`, `office`), and tags for mypooldash
+entries.
+
+## Time-sensitive communication rules
+
+Use agentic judgement for reminders, but make the final schedule explicit.
+Cormac prefers exact, compact confirmations and will usually avoid vague time
+phrases. When time is fuzzy, do not silently guess and move on.
+
+- **Timezone** — interpret natural-language times in `America/New_York` unless
+  Cormac explicitly says otherwise. Store ISO times with an offset when you can
+  (for example `2026-07-03T15:00:00-04:00`).
+- **Due time vs reminder time** — `due_time` is when the task is due. Each
+  `reminder_times` entry is when Telegram should ping him. These can be the
+  same moment, but they do not have to be.
+- **Lead time judgement** — choose reminder lead time based on context. A quick
+  call might need a same-day reminder; an appointment might need the evening
+  before plus travel-time warning; a hard deadline may deserve a morning-of and
+  a final reminder. If you are not confident, ask before filing.
+- **Vague phrases** — for "tomorrow morning", "tonight", "this afternoon",
+  "by Friday", "next week", or similar, use any available context to propose an
+  exact due/reminder time: "I can set that for Fri, 7/3 @ 9am. Does that work?"
+  If context is too thin, ask for the time.
+- **No time supplied** — if Cormac asks for a reminder but gives no usable time,
+  propose a reasonable exact time from context. If there is no reasonable guess,
+  ask for a time before scheduling. You may still file the item only if you make
+  clear that no reminder has been scheduled yet.
+- **Multiple reminders** — schedule more than one reminder when the task seems
+  high priority, deadline-ish, appointment-like, travel-sensitive, or easy to
+  miss. If multiple reminders feel useful but not obvious, ask.
+- **Past or impossible times** — never schedule a reminder in the past. Ask for
+  a corrected time or propose the next plausible future time.
+- **Confirmation format** — after filing and scheduling, reply compactly using
+  dates like `Fri, 7/3 @ 3pm`. For multiple reminders, list each one briefly:
+  "Added to work to-do. Reminders: Thu, 7/2 @ 5pm; Fri, 7/3 @ 9am."
+- **Failure handling** — if capture succeeds but cron scheduling fails, say so
+  plainly: the item was saved, but the reminder was not scheduled. Do not run
+  `reconcile_crons.py --commit` until the cron jobs were actually created or
+  cancelled.
 
 **Examples:**
 Input: `pick up two bags of chlorine tablets`
@@ -108,10 +147,10 @@ Input: `order more business cards for the shop`
 → work_shopping, item "business cards"
 
 Input: `remind me to call the pool inspector at 3pm tomorrow`
-→ work_todo, title "Call the pool inspector", due 3pm tomorrow (ISO), reminder needed
+→ work_todo, title "Call the pool inspector", due 3pm tomorrow (ISO), choose a reminder time from context
 
 Input: `book the dentist for next tuesday morning`
-→ personal_todo, title "Book the dentist", due next Tuesday (ISO), reminder needed
+→ propose an exact time first, e.g. "I can set that for Tue, 7/7 @ 9am. Does that work?"
 
 Input: `what if MyPoolDashboard emailed staff when a reading is overdue`
 → mypooldash, type "idea", title "Email staff when a reading is overdue"
@@ -120,7 +159,7 @@ Input: `the login form on mypooldashboard 500s on mobile safari`
 → mypooldash, type "bug", title "Login form 500s on mobile Safari"
 
 Input: `fix the login bug on the dashboard by friday`
-→ mypooldash, type "todo", title "Fix the login bug", due Friday (ISO), reminder needed
+→ mypooldash, type "todo", title "Fix the login bug", due Friday (ISO), likely schedule one or more reminders before the deadline
 
 Input: `the thing we talked about earlier`
 → inbox (too vague to place), suggested "work_todo", low confidence
@@ -145,11 +184,12 @@ python3 scripts/capture.py --bucket work_shopping --text "business cards" --qty 
 
 # work to-do with a due time
 python3 scripts/capture.py --bucket work_todo --text "Call the pool inspector" \
-    --due 2026-07-02T15:00 --priority high
+    --due 2026-07-02T15:00:00-04:00 --reminder-at 2026-07-02T14:30:00-04:00 \
+    --priority high
 
 # personal to-do with a due time
 python3 scripts/capture.py --bucket personal_todo --text "Book the dentist" \
-    --due 2026-07-08T09:00
+    --due 2026-07-08T09:00:00-04:00 --reminder-at 2026-07-07T18:00:00-04:00
 
 # mypooldash idea
 python3 scripts/capture.py --bucket mypooldash --type idea \
@@ -162,7 +202,9 @@ python3 scripts/capture.py --bucket mypooldash --type bug \
 
 # mypooldash to-do with a due time
 python3 scripts/capture.py --bucket mypooldash --type todo \
-    --text "Fix the login bug" --due 2026-07-04T17:00 --priority high
+    --text "Fix the login bug" --due 2026-07-04T17:00:00-04:00 \
+    --reminder-at 2026-07-04T09:00:00-04:00 \
+    --reminder-at 2026-07-04T16:00:00-04:00 --priority high
 
 # unclear
 python3 scripts/capture.py --bucket inbox --text "the thing we discussed" \
@@ -170,24 +212,27 @@ python3 scripts/capture.py --bucket inbox --text "the thing we discussed" \
 ```
 
 The script prints JSON with the stored `record`, a ready-to-send
-`confirmation`, and `reminder_needed`. **Always reply to Cormac with the
-confirmation** so he knows it landed and can correct fast — e.g. "Added to your
-personal shopping list ✅". Full field list is in `references/SCHEMAS.md`.
+`confirmation`, and `reminder_needed`. **Always reply to Cormac** so he knows it
+landed and can correct fast. If no reminder was needed, the script confirmation
+is enough. If reminders were scheduled, include the exact reminder time(s) in
+the compact format above, e.g. "Added to work to-do. Reminder: Fri, 7/3 @ 3pm."
+Full field list is in `references/SCHEMAS.md`.
 
 ## Reminders (to-do items with a due time)
 
 When `capture.py` reports `reminder_needed: true`, run the reconcile loop.
 This applies to `work_todo` and `personal_todo` items, and to `mypooldash`
-entries filed with `type: todo` — any open to-do with a due time earns a
-reminder, regardless of which bucket it's in.
+entries filed with `type: todo` — any open to-do with `reminder_times` earns
+one or more reminders, regardless of which bucket it's in. Older records with a
+`due_time` but no `reminder_times` fall back to one reminder at `due_time`.
 
 ```bash
 # 1. See what needs scheduling / cancelling
 python3 scripts/reconcile_crons.py
 
 # 2. For each item in "to_schedule", create a cron job with YOUR cron tool that
-#    fires at due_time and sends the "message" over Telegram. For each item in
-#    "to_cancel", cancel that job.
+#    fires at reminder_time and sends the "message" over Telegram. For each item
+#    in "to_cancel", cancel that job.
 
 # 3. Record that you did it, so nothing double-schedules next time
 python3 scripts/reconcile_crons.py --commit
@@ -196,8 +241,88 @@ python3 scripts/reconcile_crons.py --commit
 The script only computes the plan — it can't touch cron or Telegram itself, so
 step 2 is your job. Re-running reconcile is always safe: already-scheduled
 reminders won't be scheduled again. It also cancels reminders whose task was
-completed, moved, or whose time has passed. Run it after any batch of captures
-or corrections that touched a due time.
+completed, moved, left `open` status, removed from `reminder_times`, or whose
+reminder time has passed. Run it after any batch of captures or corrections
+that touched a due time, reminder time, or lifecycle state.
+
+## Review and planning loop
+
+Use review mode whenever Cormac asks to plan, triage, clean up, see what is due,
+clear stale items, or get a daily/weekly overview. This is the productivity
+counterpart to capture: do not just list everything; help him decide what needs
+attention next.
+
+```bash
+python3 scripts/review.py --mode today
+python3 scripts/review.py --mode week
+python3 scripts/review.py --mode stale --stale-days 14
+python3 scripts/review.py --mode inbox
+python3 scripts/review.py --mode all
+```
+
+Relay the brief in a compact way and add useful judgement:
+
+- For `today`, call out overdue, due today, blocked, waiting, and inbox items.
+- For `week`, call out the next seven days, delegated/waiting items, and stale
+  open work that should be handled or dropped.
+- For `stale`, ask whether old open items should be completed, snoozed,
+  delegated, moved, or dropped.
+- For `inbox`, classify each inbox item if possible, then move it or ask a
+  focused clarification.
+
+If a review reveals time-sensitive work without reminders, propose exact
+reminder times using the time-sensitive communication rules above.
+
+## Lifecycle management
+
+Items now have richer states than just `open` and `done`. Use these states when
+Cormac gives lifecycle language, or when a review makes the next state obvious:
+
+- `open` — active and owned by Cormac.
+- `done` — completed, bought, fixed, shipped, or no longer needs action.
+- `snoozed` — intentionally hidden until a future time.
+- `waiting` — blocked on someone or something external.
+- `blocked` — cannot move until a specific obstacle is resolved.
+- `delegated` — someone else owns the next action.
+- `dropped` — intentionally abandoned; not the same as completed.
+
+```bash
+python3 scripts/correct.py --id wt-20260702-0001 --status waiting --waiting-on "Alex"
+python3 scripts/correct.py --id pt-20260702-0002 --status snoozed --snooze-until 2026-07-08T09:00:00-04:00
+python3 scripts/correct.py --id mpd-20260702-0003 --status blocked --blocked-reason "needs repro steps"
+python3 scripts/correct.py --id wt-20260702-0004 --status delegated --delegated-to "Jordan"
+python3 scripts/correct.py --id x-20260702-0005 --status dropped
+python3 scripts/correct.py --id wt-20260702-0006 --update --add-tag permit --priority high
+```
+
+When an item leaves `open`, run the reconcile loop if it had reminders so live
+cron jobs are cancelled. Confirm lifecycle changes plainly: "Marked waiting on
+Alex" or "Snoozed until Wed, 7/8 @ 9am."
+
+## Enrichment and cleanup
+
+Use enrichment when a capture looks similar to an existing item, when a review
+is noisy, when Cormac asks to clean up the system, or before filing something
+important where tags/urgency would help future retrieval.
+
+```bash
+python3 scripts/enrich.py --text "follow up with the inspector about permit renewal" --bucket work_todo
+python3 scripts/enrich.py --id wt-20260702-0001
+```
+
+The script prints suggested tags, suggested urgency, and duplicate candidates.
+Treat this as a hint, not a command. If there is a strong duplicate candidate,
+ask before creating another item or update the existing item when Cormac's
+intent is clear. If tags or urgency are useful, apply them with `correct.py
+--update`.
+
+Cleanup rules:
+
+- Prefer merging or updating obvious duplicates over adding clutter.
+- Add a small number of useful tags; do not over-tag routine items.
+- Use `dropped` for abandoned work so completion history stays honest.
+- Leave ambiguous inbox items in `inbox` only after asking or proposing a
+  focused classification.
 
 ## Corrections and completion
 
@@ -208,6 +333,7 @@ Cormac will fix your guesses in plain language. Identify which entry he means
 python3 scripts/correct.py --id x-20260702-0004 --move work_todo    # wrong bucket
 python3 scripts/correct.py --id ps-20260702-0001 --done             # "I bought that"
 python3 scripts/correct.py --id wt-20260702-0002 --undone           # reopen
+python3 scripts/correct.py --id wt-20260702-0003 --status waiting --waiting-on "Alex"
 ```
 
 Moving keeps the original capture time and drops fields that don't apply to the
@@ -221,6 +347,7 @@ python3 scripts/query.py --bucket personal_shopping           # the personal sho
 python3 scripts/query.py --bucket work_todo --due-within 7d   # work tasks due this week
 python3 scripts/query.py --search inspector                    # find across all buckets
 python3 scripts/query.py --bucket personal_shopping --include-done
+python3 scripts/query.py --bucket work_todo --status waiting
 ```
 
 Output is clean text with no hidden metadata — relay it straight to Telegram.

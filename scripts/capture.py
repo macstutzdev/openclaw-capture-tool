@@ -12,14 +12,15 @@ Examples:
     python3 capture.py --bucket personal_shopping --text "chlorine tablets" --qty 2
     python3 capture.py --bucket work_shopping --text "printer ink" --qty 1
     python3 capture.py --bucket work_todo --text "Call the pool inspector" \
-        --due 2026-07-01T15:00 --priority high
+        --due 2026-07-01T15:00 --reminder-at 2026-07-01T14:30 --priority high
     python3 capture.py --bucket personal_todo --text "Book the dentist" \
-        --due 2026-07-03T09:00
+        --due 2026-07-03T09:00 --reminder-at 2026-07-02T18:00
     python3 capture.py --bucket mypooldash --type idea --text "Photo upload for test logs" \
         --description "let staff attach a photo to each reading" --tags ui,logging
     python3 capture.py --bucket mypooldash --type bug --text "Login form 500s on mobile Safari"
     python3 capture.py --bucket mypooldash --type todo --text "Fix the login bug" \
-        --due 2026-07-03T09:00 --priority high
+        --due 2026-07-03T09:00 --reminder-at 2026-07-02T17:00 \
+        --reminder-at 2026-07-03T08:30 --priority high
     python3 capture.py --bucket inbox --text "the thing about the thing" \
         --confidence 0.3 --suggested work_todo
 """
@@ -41,25 +42,37 @@ CONFIRM = {
 }
 
 
+def _split_csv(value):
+    return [item.strip() for item in value.split(",") if item.strip()] if value else None
+
+
 def build_record(args):
     b = args.bucket
     if b in lib.TODO_BUCKETS:
-        return lib.new_record(
-            b, title=args.text, due_time=args.due,
-            priority=args.priority or "normal", status="open", notes=args.notes,
+        fields = dict(
+            title=args.text, due_time=args.due,
+            reminder_times=args.reminder_at,
+            priority=args.priority or "normal", urgency=args.urgency,
+            status="open", notes=args.notes, tags=_split_csv(args.tags),
+            context=args.context,
         )
+        return lib.new_record(b, **fields)
     if b in lib.SHOPPING_BUCKETS:
         return lib.new_record(
             b, item=args.text, quantity=args.qty, category=args.category,
-            urgency=args.urgency, status="open",
+            urgency=args.urgency, status="open", tags=_split_csv(args.tags),
+            notes=args.notes,
         )
     if b == "mypooldash":
-        tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+        tags = _split_csv(args.tags)
         kind = args.type or "idea"
         fields = dict(title=args.text, type=kind, description=args.description,
-                      tags=tags, status="open")
+                      tags=tags, status="open", context=args.context)
         if kind == "todo":
-            fields.update(due_time=args.due, priority=args.priority or "normal")
+            fields.update(
+                due_time=args.due, reminder_times=args.reminder_at,
+                priority=args.priority or "normal",
+            )
         return lib.new_record(b, **fields)
     # inbox
     return lib.new_record(
@@ -74,6 +87,8 @@ def main():
     ap.add_argument("--bucket", required=True, choices=lib.BUCKETS)
     ap.add_argument("--text", required=True, help="the task / item / idea / raw message")
     ap.add_argument("--due", help="ISO 8601 due time for work tasks, e.g. 2026-07-01T15:00")
+    ap.add_argument("--reminder-at", action="append",
+                    help="ISO 8601 reminder time; repeat for multiple reminders")
     ap.add_argument("--priority", choices=["low", "normal", "high"])
     ap.add_argument("--qty")
     ap.add_argument("--category")
@@ -85,6 +100,7 @@ def main():
     ap.add_argument("--confidence", type=float, help="inbox: 0–1 classifier confidence")
     ap.add_argument("--suggested", choices=lib.BUCKETS, help="inbox: best-guess bucket")
     ap.add_argument("--notes")
+    ap.add_argument("--context", help="optional free-form context label")
     args = ap.parse_args()
 
     try:
@@ -95,7 +111,9 @@ def main():
         print(json.dumps({"ok": False, "error": str(e)}))
         sys.exit(1)
 
-    reminder_needed = lib.reminds(args.bucket, record) and bool(args.due)
+    reminder_needed = lib.reminds(args.bucket, record) and bool(
+        record.get("reminder_times") or record.get("due_time")
+    )
     print(json.dumps({
         "ok": True,
         "record": record,

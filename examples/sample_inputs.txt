@@ -19,3 +19,13 @@ the login form on mypooldashboard 500s on mobile safari   # mypooldash/bug
 fix the login bug on the dashboard by friday            # mypooldash/todo (+ reminder)
 the thing we talked about earlier               # inbox (too vague)
 follow up on that                               # inbox (too vague)
+
+# Review / cleanup examples
+plan my day                                     # review/today
+what's stale?                                  # review/stale
+clear my inbox                                 # review/inbox + classify/move
+mark the inspector one waiting on Alex          # lifecycle waiting
+snooze the dentist task until next Wednesday morning  # lifecycle snoozed (propose exact time)
+Jordan owns the invoice follow-up now           # lifecycle delegated
+drop the old dashboard idea                     # lifecycle dropped
+is this duplicate: follow up with the inspector about the permit renewal  # enrich duplicate check

@@ -12,14 +12,17 @@ capture-tool/
 │   └── SCHEMAS.md               ← the data shape of each bucket
 ├── examples/
 │   └── sample_inputs.txt        ← test messages
+├── WALKTHROUGH.md               ← guide to the expanded workflow
 └── scripts/                     ← Python (standard library only, no installs)
     ├── lib.py                   ← shared helpers
     ├── bootstrap.py             ← one-time setup
     ├── classify.py              ← fallback classifier / test aid
     ├── capture.py               ← file a classified item
-    ├── correct.py               ← move / mark done
+    ├── correct.py               ← move / lifecycle / mark done
+    ├── enrich.py                ← suggest tags, urgency, duplicates
     ├── reconcile_crons.py       ← compute reminder schedule
     ├── query.py                 ← list / search / due-soon
+    ├── review.py                ← today / week / stale / inbox briefs
     └── migrate_v2_buckets.py    ← one-time v1 → v2 bucket migration
 ```
 
@@ -33,11 +36,14 @@ capture-tool/
 3. On your phone, turn on Telegram's voice-message transcription (Settings →
    your voice notes arrive to Cindy as text).
 4. Send one test message per bucket and check the sorting, the confirmation
-   reply, and (for a task with a time) the reminder.
+   reply, and (for a time-sensitive task) the exact reminder time or times.
+5. Ask for a day review, mark one item waiting/blocked/snoozed, and run an
+   enrichment check on a duplicate-ish item.
 
 ## The one boundary to know
 
 The reminder script works out *which* reminders should exist and hands Cindy a
 plan. Cindy creates the actual cron jobs and sends the Telegram pings with her
 own tools — the script can't reach those directly. SKILL.md spells out the
-three-step reconcile loop she follows.
+three-step reconcile loop she follows, plus the rules for vague times, exact
+confirmations, and multiple reminders.

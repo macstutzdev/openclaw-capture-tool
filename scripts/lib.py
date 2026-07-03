@@ -12,11 +12,22 @@ Standard library only — no pip installs needed.
 import json
 import os
 import re
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - OpenClaw normally runs on macOS/Linux.
+    fcntl = None
 
 BUCKETS = (
     "work_todo", "personal_todo", "work_shopping", "personal_shopping",
     "mypooldash", "inbox",
+)
+
+STATUSES = (
+    "open", "done", "snoozed", "waiting", "blocked", "delegated", "dropped",
 )
 
 # The two todo-style buckets share a schema (title/due_time/priority/status)
@@ -67,12 +78,36 @@ def now_iso():
 # ---------- atomic file helpers ----------
 
 def _atomic_write(path, text):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    directory = os.path.dirname(path) or "."
+    basename = os.path.basename(path)
+    fd, tmp = tempfile.mkstemp(prefix=f"{basename}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+@contextmanager
+def _metadata_lock(root):
+    """Serialize metadata counter updates across concurrent captures."""
+    p = paths(root)
+    os.makedirs(p["capture_dir"], exist_ok=True)
+    with open(p["metadata"] + ".lock", "w", encoding="utf-8") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def append_line(path, line):
@@ -107,10 +142,11 @@ def save_metadata(root, data):
 def next_id(root, bucket):
     """Stable, sortable id like 'w-20260701-0003'. Persists a per-bucket
     counter in metadata so ids never collide, even across sessions."""
-    meta = load_metadata(root)
-    meta["counters"][bucket] = meta["counters"].get(bucket, 0) + 1
-    n = meta["counters"][bucket]
-    save_metadata(root, meta)
+    with _metadata_lock(root):
+        meta = load_metadata(root)
+        meta["counters"][bucket] = meta["counters"].get(bucket, 0) + 1
+        n = meta["counters"][bucket]
+        save_metadata(root, meta)
     return f"{_ID_PREFIX[bucket]}-{datetime.now().strftime('%Y%m%d')}-{n:04d}"
 
 
@@ -127,43 +163,83 @@ def _fmt_due(due_time):
     return dt.strftime("%a %d %b, %-I:%M %p")
 
 
+def _status_box(status):
+    return "x" if status == "done" else " "
+
+
+def _lifecycle_bits(record):
+    bits = []
+    status = record.get("status")
+    has_detail = (
+        (status == "snoozed" and record.get("snooze_until"))
+        or (status == "waiting" and record.get("waiting_on"))
+        or (status == "delegated" and record.get("delegated_to"))
+        or (status == "blocked" and record.get("blocked_reason"))
+    )
+    if status and status not in ("open", "done") and not has_detail:
+        bits.append(status)
+    if record.get("snooze_until"):
+        bits.append(f"snoozed until {_fmt_due(record['snooze_until'])}")
+    if record.get("waiting_on"):
+        bits.append(f"waiting on {record['waiting_on']}")
+    if record.get("delegated_to"):
+        bits.append(f"delegated to {record['delegated_to']}")
+    if record.get("blocked_reason"):
+        bits.append(f"blocked: {record['blocked_reason']}")
+    if record.get("urgency") and record["urgency"] != "normal":
+        bits.append(f"urgency {record['urgency']}")
+    return bits
+
+
+def _fmt_tags(record, exclude=None):
+    excluded = set(exclude or [])
+    tags = [tag for tag in record.get("tags") or [] if tag not in excluded]
+    return f"  [{', '.join(tags)}]" if tags else ""
+
+
 def visible_text(record):
     """Build the human-facing part of a line from a record."""
     b = record["bucket"]
     if b in TODO_BUCKETS:
-        box = "x" if record.get("status") == "done" else " "
+        box = _status_box(record.get("status"))
         line = f"- [{box}] {record['title']}"
         bits = []
         if record.get("due_time"):
             bits.append(f"due {_fmt_due(record['due_time'])}")
         if record.get("priority") and record["priority"] != "normal":
             bits.append(record["priority"])
+        bits.extend(_lifecycle_bits(record))
         if bits:
             line += f" ({', '.join(bits)})"
+        line += _fmt_tags(record)
         return line
     if b in SHOPPING_BUCKETS:
-        box = "x" if record.get("status") == "done" else " "
+        box = _status_box(record.get("status"))
         line = f"- [{box}] {record['item']}"
         if record.get("quantity"):
             line += f" ×{record['quantity']}"
         if record.get("category"):
             line += f"  [{record['category']}]"
+        bits = _lifecycle_bits(record)
+        if bits:
+            line += f" ({', '.join(bits)})"
+        line += _fmt_tags(record, exclude=[record.get("category")])
         return line
     if b == "mypooldash":
         kind = record.get("type", "idea")
-        box = "x" if record.get("status") == "done" else " "
+        box = _status_box(record.get("status"))
         line = f"- [{box}] [{kind}] {record['title']}"
         bits = []
         if kind == "todo" and record.get("due_time"):
             bits.append(f"due {_fmt_due(record['due_time'])}")
         if kind == "todo" and record.get("priority") and record["priority"] != "normal":
             bits.append(record["priority"])
+        bits.extend(_lifecycle_bits(record))
         if bits:
             line += f" ({', '.join(bits)})"
         if record.get("description"):
             line += f" — {record['description']}"
-        if record.get("tags"):
-            line += f"  [{', '.join(record['tags'])}]"
+        line += _fmt_tags(record)
         return line
     # inbox
     line = f"- {record['raw_input']}"

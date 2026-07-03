@@ -15,6 +15,21 @@ keep the visible line and the record in sync and manage ids.
 | `bucket`     | string | one of `work_todo`, `personal_todo`, `work_shopping`, `personal_shopping`, `mypooldash`, `inbox` |
 | `id`         | string | e.g. `wt-20260702-0001`; prefix marks the bucket (`wt`/`pt`/`ws`/`ps`/`mpd`/`x`) |
 | `created_at` | string | ISO 8601, set at capture; preserved across a move                       |
+| `status`     | string | `open` / `done` / `snoozed` / `waiting` / `blocked` / `delegated` / `dropped`; bucket records default to `open` |
+| `tags`       | array  | optional lightweight labels inferred or chosen by the agent             |
+| `context`    | string | optional free-form context such as `phone`, `errand`, `computer`, `office` |
+
+## Lifecycle fields
+
+These optional fields can appear on any bucket when useful. They are managed by
+`correct.py` and shown in the visible Markdown line.
+
+| field            | type   | notes                                                   |
+|------------------|--------|---------------------------------------------------------|
+| `snooze_until`   | string | ISO 8601 time when the item should become relevant again |
+| `waiting_on`     | string | person, company, or dependency the item is waiting on   |
+| `delegated_to`   | string | person responsible for the next action                  |
+| `blocked_reason` | string | concise reason the item is blocked                      |
 
 ## work_todo / personal_todo
 
@@ -24,9 +39,10 @@ Same schema for both — only the bucket (and therefore the id prefix) differs.
 | field       | type   | notes                                              |
 |-------------|--------|----------------------------------------------------|
 | `title`     | string | the task                                           |
-| `due_time`  | string | ISO 8601; presence triggers a reminder. Optional.  |
+| `due_time`  | string | ISO 8601 deadline/due time. Optional.              |
+| `reminder_times` | array | Optional ISO 8601 reminder times chosen by agentic judgement; repeat entries for multiple Telegram reminders. |
 | `priority`  | string | `low` / `normal` / `high` (default `normal`)       |
-| `status`    | string | `open` / `done`                                    |
+| `urgency`   | string | optional `low` / `normal` / `high`; useful for review and cleanup |
 | `notes`     | string | optional                                           |
 
 ## work_shopping / personal_shopping
@@ -41,7 +57,7 @@ everything else (household, personal errands).
 | `quantity` | string | optional (e.g. `2`, `500g`)                                    |
 | `category` | string | optional free-form subcategory (e.g. `pool`, `food`, `office`) |
 | `urgency`  | string | optional `low`/`normal`/`high`                                 |
-| `status`   | string | `open` / `done`                                                |
+| `notes`    | string | optional                                                       |
 
 ## mypooldash
 
@@ -53,10 +69,10 @@ reports — in one bucket, distinguished by `type`.
 | `type`        | string | `idea` / `todo` / `bug` (default `idea`)                       |
 | `title`       | string | the idea, task, or bug in a line                               |
 | `description` | string | optional, a sentence of detail                                 |
-| `due_time`    | string | ISO 8601; only meaningful when `type` is `todo`. Presence triggers a reminder, same as work_todo/personal_todo. |
+| `due_time`    | string | ISO 8601 deadline/due time; only meaningful when `type` is `todo`. |
+| `reminder_times` | array | Optional ISO 8601 reminder times; only meaningful when `type` is `todo`. |
 | `priority`    | string | `low` / `normal` / `high` (default `normal`); only meaningful when `type` is `todo` |
-| `tags`        | array  | optional list of strings                                       |
-| `status`      | string | `open` / `done` (done = shipped/dropped/fixed/completed)        |
+| `urgency`     | string | optional `low` / `normal` / `high`                             |
 
 ## inbox
 
@@ -79,8 +95,10 @@ Not a bucket — the tool's bookkeeping.
     "mypooldash": 2, "inbox": 1
   },
   "scheduled": {
-    "wt-20260702-0001": {
-      "due_time": "2026-07-02T15:00:00+01:00",
+    "wt-20260702-0001::r1": {
+      "task_id": "wt-20260702-0001",
+      "reminder_time": "2026-07-02T14:30:00-04:00",
+      "due_time": "2026-07-02T15:00:00-04:00",
       "message": "⏰ Reminder: Call the pool inspector",
       "cron_note": null
     }
@@ -89,10 +107,26 @@ Not a bucket — the tool's bookkeeping.
 ```
 
 - `counters` — per-bucket id counters, so ids never collide.
-- `scheduled` — reminders the tool believes are live, keyed by task id (from
-  `work_todo`, `personal_todo`, or a `mypooldash` entry with `type: todo`).
-  This is what prevents double-scheduling. `cron_note` is a free slot to
-  record your cron tool's own job reference if that helps you cancel later.
+- `scheduled` — reminders the tool believes are live. A single-reminder task
+  may be keyed by task id; multi-reminder tasks use ids like
+  `wt-20260702-0001::r1`. `task_id` points back to the captured item from
+  `work_todo`, `personal_todo`, or a `mypooldash` entry with `type: todo`.
+  `reminder_time` is when Telegram should ping; `due_time` is the task's
+  deadline. This is what prevents double-scheduling. Reminders are only kept
+  for records whose status is `open`; moving an item to `waiting`, `blocked`,
+  `delegated`, `snoozed`, `done`, or `dropped` cancels live reminder jobs on the
+  next reconcile. `cron_note` is a free slot to record your cron tool's own job
+  reference if that helps you cancel later.
+
+## Enrichment output
+
+`scripts/enrich.py` does not write records. It prints JSON with:
+
+| field                  | type  | notes                                           |
+|------------------------|-------|-------------------------------------------------|
+| `suggested_tags`       | array | rule-based tags the agent may apply             |
+| `suggested_urgency`    | string| `low` / `normal` / `high` hint                  |
+| `duplicate_candidates` | array | likely duplicate active items with id, bucket, score, and visible text |
 
 ## Migrating from the v1 layout
 

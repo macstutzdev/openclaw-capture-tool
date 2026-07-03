@@ -6,10 +6,10 @@ this week", "find anything about the inspector". Prints clean human-readable
 text (no hidden metadata) that Cindy can relay straight to Telegram.
 
 Examples:
-    python3 query.py --bucket shopping
-    python3 query.py --bucket work --due-within 7d
+    python3 query.py --bucket personal_shopping
+    python3 query.py --bucket work_todo --due-within 7d
     python3 query.py --search inspector
-    python3 query.py --bucket work --include-done
+    python3 query.py --bucket work_todo --status waiting
 """
 
 import argparse
@@ -38,12 +38,18 @@ def _parse_window(s):
     return {"d": timedelta(days=n), "h": timedelta(hours=n), "w": timedelta(weeks=n)}[unit]
 
 
-def list_bucket(root, bucket, include_done, window):
+def _default_visible(record):
+    return record.get("status", "open") not in ("done", "dropped")
+
+
+def list_bucket(root, bucket, include_done, window, status):
     now = datetime.now().astimezone()
     records = lib.read_entries(root, bucket)
     lines = []
     for r in records:
-        if not include_done and r.get("status") == "done":
+        if status and r.get("status", "open") != status:
+            continue
+        if not include_done and not status and not _default_visible(r):
             continue
         if window is not None and not _within(r, now, now + window):
             continue
@@ -69,6 +75,7 @@ def main():
     ap.add_argument("--search")
     ap.add_argument("--due-within", help="e.g. 7d, 24h, 2w (work tasks with a due time)")
     ap.add_argument("--include-done", action="store_true")
+    ap.add_argument("--status", choices=lib.STATUSES)
     args = ap.parse_args()
 
     if args.search:
@@ -86,7 +93,7 @@ def main():
         ap.error("give --bucket or --search")
 
     window = _parse_window(args.due_within) if args.due_within else None
-    lines = list_bucket(args.root, args.bucket, args.include_done, window)
+    lines = list_bucket(args.root, args.bucket, args.include_done, window, args.status)
     if not lines:
         print(f"({args.bucket}: nothing to show)")
         return
