@@ -7,8 +7,6 @@ change, but this gives it a consistent second pass during cleanup and reviews.
 
 import argparse
 import json
-import re
-from difflib import SequenceMatcher
 
 import lib
 
@@ -31,14 +29,6 @@ HIGH_URGENCY = [
 ]
 
 NORMAL_URGENCY = ["tomorrow", "this week", "by friday", "next week"]
-
-
-def _record_text(record):
-    return " ".join(
-        str(record.get(field, ""))
-        for field in ("title", "item", "raw_input", "description", "notes")
-        if record.get(field)
-    )
 
 
 def _find_record(root, entry_id):
@@ -67,39 +57,6 @@ def _suggest_urgency(text):
     return "low"
 
 
-def _token_set(text):
-    return set(re.findall(r"[a-z0-9]+", text.lower()))
-
-
-def _duplicate_score(a, b):
-    ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
-    a_tokens, b_tokens = _token_set(a), _token_set(b)
-    if not a_tokens or not b_tokens:
-        return ratio
-    overlap = len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
-    return round((ratio + overlap) / 2, 3)
-
-
-def _duplicates(root, text, bucket, entry_id, min_score):
-    matches = []
-    for candidate_bucket in lib.BUCKETS:
-        if bucket and candidate_bucket != bucket:
-            continue
-        for record in lib.read_entries(root, candidate_bucket):
-            if record.get("id") == entry_id or record.get("status") in ("done", "dropped"):
-                continue
-            candidate_text = _record_text(record)
-            score = _duplicate_score(text, candidate_text)
-            if score >= min_score:
-                matches.append({
-                    "id": record.get("id"),
-                    "bucket": candidate_bucket,
-                    "score": score,
-                    "text": lib.visible_text(record),
-                })
-    return sorted(matches, key=lambda item: item["score"], reverse=True)
-
-
 def enrich(root, text, bucket=None, entry_id=None, min_score=0.55):
     tags = _suggest_tags(text)
     urgency = _suggest_urgency(text)
@@ -108,7 +65,8 @@ def enrich(root, text, bucket=None, entry_id=None, min_score=0.55):
         "text": text,
         "suggested_tags": tags,
         "suggested_urgency": urgency,
-        "duplicate_candidates": _duplicates(root, text, bucket, entry_id, min_score),
+        "duplicate_candidates": lib.duplicate_candidates(
+            root, text, bucket, entry_id, min_score),
     }
 
 
@@ -129,7 +87,7 @@ def main():
         if record is None:
             print(json.dumps({"ok": False, "error": f"id {args.id} not found"}))
             raise SystemExit(1)
-        text = _record_text(record)
+        text = lib.record_text(record)
         bucket = record["bucket"]
         entry_id = record["id"]
     if not text:

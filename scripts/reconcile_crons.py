@@ -85,11 +85,13 @@ def _reminder_time_from_schedule(info):
 
 def build_plan(root):
     now = datetime.now().astimezone()
+    today = now.date().isoformat()
     meta = lib.load_metadata(root)
     scheduled = meta["scheduled"]
+    nudged = meta["nudged"]
 
     tasks = lib.all_remindable_entries(root)
-    to_schedule, to_cancel = [], []
+    to_schedule, to_cancel, to_nudge = [], [], []
     active_reminder_ids = set()
 
     # New reminders needed.
@@ -125,7 +127,26 @@ def build_plan(root):
         if rec is None or rec.get("status", "open") != "open" or past or stale:
             to_cancel.append({"id": rid, "task_id": tid, "cron_note": info.get("cron_note")})
 
-    return meta, {"to_schedule": to_schedule, "to_cancel": to_cancel}
+    # Follow-through: open items whose due time has passed. These are what the
+    # agent should chase ("still open — done?"). Emitted at most once per day
+    # per item via the "nudged" stamp, so digests don't nag repeatedly.
+    for tid, rec in tasks.items():
+        if rec.get("status", "open") != "open":
+            continue
+        due_at = _as_local(_parse_dt(rec.get("due_time")))
+        if due_at is None or due_at > now:
+            continue
+        if nudged.get(tid) == today:
+            continue
+        to_nudge.append({
+            "id": tid,
+            "task_id": tid,
+            "due_time": rec.get("due_time"),
+            "overdue_since": _short_dt(rec.get("due_time")),
+            "message": _reminder_message(rec),
+        })
+
+    return meta, {"to_schedule": to_schedule, "to_cancel": to_cancel, "to_nudge": to_nudge}
 
 
 def _parse_cron_notes(pairs):
@@ -142,7 +163,8 @@ def _parse_cron_notes(pairs):
     return notes
 
 
-def commit(root, meta, plan, cron_notes):
+def apply_commit(meta, plan, cron_notes):
+    """Record scheduled/cancelled reminders into meta (caller saves)."""
     scheduled = meta["scheduled"]
     for item in plan["to_schedule"]:
         scheduled[item["id"]] = {
@@ -154,7 +176,14 @@ def commit(root, meta, plan, cron_notes):
         }
     for item in plan["to_cancel"]:
         scheduled.pop(item["id"], None)
-    lib.save_metadata(root, meta)
+
+
+def mark_nudged(meta, plan, today):
+    """Stamp today's date on every to_nudge item so it isn't chased again
+    until tomorrow (caller saves). Clears stamps for items no longer overdue."""
+    nudged = meta["nudged"]
+    for item in plan["to_nudge"]:
+        nudged[item["task_id"]] = today
 
 
 def main():
@@ -167,9 +196,13 @@ def main():
                          "required for every to_schedule item on --commit")
     ap.add_argument("--force", action="store_true",
                     help="allow --commit even without cron ids (manual recovery only)")
+    ap.add_argument("--mark-nudged", action="store_true",
+                    help="stamp today's to_nudge items as chased (run AFTER sending the nudge)")
     args = ap.parse_args()
 
     meta, plan = build_plan(args.root)
+    today = datetime.now().astimezone().date().isoformat()
+    dirty = False
 
     if args.commit:
         try:
@@ -190,8 +223,17 @@ def main():
             }, indent=2))
             sys.exit(1)
 
-        commit(args.root, meta, plan, cron_notes)
+        apply_commit(meta, plan, cron_notes)
         plan["committed"] = True
+        dirty = True
+
+    if args.mark_nudged:
+        mark_nudged(meta, plan, today)
+        plan["nudged_marked"] = True
+        dirty = True
+
+    if dirty:
+        lib.save_metadata(args.root, meta)
 
     print(json.dumps(plan, indent=2))
 

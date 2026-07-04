@@ -15,6 +15,7 @@ import re
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 
 try:
     import fcntl
@@ -145,6 +146,9 @@ def load_metadata(root):
         data = json.load(f)
     data.setdefault("counters", {b: 0 for b in BUCKETS})
     data.setdefault("scheduled", {})
+    # task_id -> YYYY-MM-DD of the last overdue nudge, so follow-through pings
+    # an item at most once a day.
+    data.setdefault("nudged", {})
     return data
 
 
@@ -434,3 +438,85 @@ def validate_reminder_job(job, telegram_to=None):
     if str(delivery.get("to")) != str(to):
         problems.append(f'delivery.to must be {to!r} (got {delivery.get("to")!r})')
     return problems
+
+
+# ---------- proactive digest cron spec ----------
+#
+# A digest is a *recurring* OpenClaw cron job that wakes an isolated agent to
+# run a review and push it to Telegram unprompted. Unlike a reminder (which just
+# outputs fixed text and uses announce delivery), the digest agent needs the
+# skill loaded so it can run review.py --buttons and send an interactive
+# checklist itself — so lightContext is false and delivery.mode is "none".
+
+def digest_cron_spec(slug, cron_expr, agent_message, tz=None):
+    """Build a recurring cron job that runs a proactive digest.
+
+    `cron_expr` is a standard 5-field expression interpreted in `tz` (defaults
+    to DEFAULT_TZ, i.e. Eastern wall-clock). `agent_message` is the self-
+    contained instruction the isolated agent runs at each fire.
+    """
+    return {
+        "name": f"Capture digest: {slug}",
+        "schedule": {"kind": "cron", "expr": cron_expr, "tz": tz or DEFAULT_TZ},
+        "sessionTarget": "isolated",
+        "wakeMode": "now",
+        "payload": {
+            "kind": "agentTurn",
+            "message": agent_message,
+            "timeoutSeconds": 120,
+            "lightContext": False,
+        },
+        "delivery": {"mode": "none"},
+    }
+
+
+# ---------- duplicate detection ----------
+#
+# Shared by enrich.py (on request) and capture.py (automatically, before
+# filing) so the same similarity scoring guards both paths.
+
+_DUP_TEXT_FIELDS = ("title", "item", "raw_input", "description", "notes")
+
+# capture.py refuses to silently file above this; enrich.py reports above 0.55.
+STRONG_DUPLICATE_SCORE = 0.72
+
+
+def record_text(record):
+    """Flatten a record's human fields into one string for comparison."""
+    return " ".join(
+        str(record.get(field, "")) for field in _DUP_TEXT_FIELDS if record.get(field)
+    )
+
+
+def _dup_token_set(text):
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def duplicate_score(a, b):
+    """0–1 similarity blending sequence ratio and token overlap."""
+    ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    a_tokens, b_tokens = _dup_token_set(a), _dup_token_set(b)
+    if not a_tokens or not b_tokens:
+        return ratio
+    overlap = len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
+    return round((ratio + overlap) / 2, 3)
+
+
+def duplicate_candidates(root, text, bucket=None, entry_id=None, min_score=0.55):
+    """Active records similar to `text`, best match first. Skips done/dropped."""
+    matches = []
+    for candidate_bucket in BUCKETS:
+        if bucket and candidate_bucket != bucket:
+            continue
+        for record in read_entries(root, candidate_bucket):
+            if record.get("id") == entry_id or record.get("status") in ("done", "dropped"):
+                continue
+            score = duplicate_score(text, record_text(record))
+            if score >= min_score:
+                matches.append({
+                    "id": record.get("id"),
+                    "bucket": candidate_bucket,
+                    "score": score,
+                    "text": visible_text(record),
+                })
+    return sorted(matches, key=lambda item: item["score"], reverse=True)

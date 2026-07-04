@@ -127,9 +127,27 @@ def main():
     ap.add_argument("--suggested", choices=lib.BUCKETS, help="inbox: best-guess bucket")
     ap.add_argument("--notes")
     ap.add_argument("--context", help="optional free-form context label")
+    ap.add_argument("--allow-dupe", action="store_true",
+                    help="file even if a strong duplicate already exists")
     args = ap.parse_args()
 
     warnings = []
+    # Proactive duplicate check BEFORE writing, so a near-identical item isn't
+    # silently added. Inbox is skipped (it's the catch-all, dups are fine).
+    dupes = []
+    if args.bucket != "inbox":
+        dupes = lib.duplicate_candidates(args.root, args.text, bucket=args.bucket)
+        strong = [d for d in dupes if d["score"] >= lib.STRONG_DUPLICATE_SCORE]
+        if strong and not args.allow_dupe:
+            print(json.dumps({
+                "ok": False,
+                "error": "possible duplicate — not filed",
+                "duplicate_candidates": strong,
+                "hint": "update the existing item, or re-run with --allow-dupe to "
+                        "file anyway",
+            }, indent=2))
+            sys.exit(2)
+
     try:
         _normalize_times(args, warnings)
         record = build_record(args)
@@ -148,6 +166,8 @@ def main():
         "confirmation": CONFIRM[args.bucket],
         "reminder_needed": reminder_needed,
         "warnings": warnings,
+        # Weaker look-alikes (below the block threshold) for the agent to mention.
+        "duplicate_candidates": dupes,
     }, indent=2))
 
 

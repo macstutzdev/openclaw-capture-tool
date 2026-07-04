@@ -102,11 +102,19 @@ Not a bucket — the tool's bookkeeping.
       "message": "⏰ Reminder: Call the pool inspector",
       "cron_note": null
     }
+  },
+  "nudged": {
+    "wt-20260702-0001": "2026-07-03"
   }
 }
 ```
 
 - `counters` — per-bucket id counters, so ids never collide.
+- `nudged` — `task_id -> YYYY-MM-DD` of the last overdue follow-through nudge,
+  so `reconcile_crons.py` chases an overdue open item at most once a day. Written
+  by `reconcile_crons.py --mark-nudged` after a nudge is actually sent; an item
+  drops out of `to_nudge` on its own once completed or rescheduled into the
+  future.
 - `scheduled` — reminders the tool believes are live. A single-reminder task
   may be keyed by task id; multi-reminder tasks use ids like
   `wt-20260702-0001::r1`. `task_id` points back to the captured item from

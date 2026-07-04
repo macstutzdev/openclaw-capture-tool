@@ -222,6 +222,18 @@ needed, the script confirmation is enough. If reminders were scheduled, include 
 the compact format above, e.g. "Added to work to-do. Reminder: Fri, 7/3 @ 3pm."
 Full field list is in `references/SCHEMAS.md`.
 
+### Duplicate check on capture
+
+`capture.py` checks for look-alikes before filing (skipped for the inbox). If a
+**strong** match already exists it refuses — prints `ok: false` with
+`duplicate_candidates` and exits without writing. When that happens, don't just
+retry: look at the candidate and decide with Cormac whether to update the
+existing item (`correct.py --update`) or genuinely add a separate one
+(`capture.py … --allow-dupe`). This matters most for `mypooldash` bugs/ideas,
+which tend to pile up as near-duplicates. On a successful capture the output
+also carries weaker `duplicate_candidates` — if one looks relevant, mention it
+("added — note this looks close to the item from Tuesday").
+
 ## Reminders (to-do items with a due time)
 
 When `capture.py` reports `reminder_needed: true`, run the reconcile loop.
@@ -261,6 +273,16 @@ scheduled again. It also cancels reminders whose task was completed, moved, left
 `open` status, removed from `reminder_times`, or whose reminder time has passed.
 Run it after any batch of captures or corrections that touched a due time,
 reminder time, or lifecycle state.
+
+### Follow-through on overdue items (`to_nudge`)
+
+`reconcile_crons.py` also emits `to_nudge`: open to-dos whose due time has
+already passed. These are things to chase, not just list — "You were going to
+call the inspector yesterday; still open?". Each item appears at most once a
+day: after you actually send the nudge, run
+`reconcile_crons.py --mark-nudged` so the same item isn't chased again until
+tomorrow (completing or rescheduling it drops it from `to_nudge` on its own).
+The proactive digests below fold `to_nudge` into their message automatically.
 
 ### Mandatory Telegram reminder cron contract
 
@@ -459,6 +481,40 @@ Notes and limits:
 - For a quick "pick one/several" question rather than a done-checklist, a native
   poll (`openclaw message poll ... --poll-multi`) is simpler, since the answer
   comes back without any callback handling.
+
+## Proactive digests
+
+Don't wait to be asked. Cormac gets scheduled, unprompted pushes so nothing
+rots: a **morning** checklist (~8am), an **evening** wrap-up (~6pm), and a
+**Sunday-night weekly review**. These are recurring OpenClaw cron jobs that wake
+an isolated agent (with this skill loaded) to run a review and send it.
+
+Set them up once with your cron tool from the deterministic specs:
+
+```bash
+python3 scripts/digest_cron_spec.py               # all three (JSON array)
+python3 scripts/digest_cron_spec.py --preset morning
+```
+
+Create each spec verbatim as a cron job. Unlike a reminder, a digest does its
+own sending: the woken agent runs `review.py --mode <mode> --buttons`, sends the
+interactive checklist, folds in any `to_nudge` items (then
+`reconcile_crons.py --mark-nudged`), and adds one short line of judgement — so
+the spec uses full context (`lightContext: false`) and `delivery.mode: "none"`,
+not announce. The exact per-digest instructions live in each spec's
+`payload.message`; follow them.
+
+Notes:
+
+- Digest cron jobs recur on an Eastern-time schedule (`schedule.kind: "cron"`
+  with a `tz`). The times are deliberately off-the-hour (7:57am, 6:03pm) so the
+  whole fleet doesn't fire at once.
+- Keep them from becoming noise: when a digest would be empty, send a short
+  "all clear" rather than a bare list, and rely on `--mark-nudged` so overdue
+  items are chased at most once a day.
+- If Cormac wants different timing or to turn one off, recreate/cancel the
+  corresponding cron job; the presets in `digest_cron_spec.py` are the defaults,
+  not a straitjacket.
 
 ## Lifecycle management
 
