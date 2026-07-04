@@ -24,6 +24,7 @@ passed.
 
 import argparse
 import json
+import sys
 from datetime import datetime
 
 import lib
@@ -56,8 +57,8 @@ def _short_dt(s):
 
 def _reminder_message(record):
     due = record.get("due_time")
-    suffix = f" (due {_short_dt(due)})" if due else ""
-    return f"⏰ Reminder: {record['title']}{suffix}"
+    due_short = _short_dt(due) if due else None
+    return lib.reminder_message(record["title"], due_short)
 
 
 def _reminder_times(record):
@@ -103,12 +104,15 @@ def build_plan(root):
             active_reminder_ids.add(rid)
             if rec.get("status") != "open" or reminder_at <= now or rid in scheduled:
                 continue
+            message = _reminder_message(rec)
             to_schedule.append({
                 "id": rid,
                 "task_id": tid,
                 "reminder_time": reminder_time,
                 "due_time": rec.get("due_time"),
-                "message": _reminder_message(rec),
+                "message": message,
+                # The exact, delivering cron job to create — do not hand-build it.
+                "cron_spec": lib.reminder_cron_spec(rid, reminder_time, message),
             })
 
     # Reminders that no longer apply.
@@ -124,7 +128,21 @@ def build_plan(root):
     return meta, {"to_schedule": to_schedule, "to_cancel": to_cancel}
 
 
-def commit(root, meta, plan):
+def _parse_cron_notes(pairs):
+    """Turn ['wt-...=abc123', ...] into {reminder_id: cron_job_id}."""
+    notes = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            raise ValueError(f"--cron-note must be id=<cron-job-id>, got {pair!r}")
+        rid, cron_id = pair.split("=", 1)
+        rid, cron_id = rid.strip(), cron_id.strip()
+        if not rid or not cron_id:
+            raise ValueError(f"--cron-note must be id=<cron-job-id>, got {pair!r}")
+        notes[rid] = cron_id
+    return notes
+
+
+def commit(root, meta, plan, cron_notes):
     scheduled = meta["scheduled"]
     for item in plan["to_schedule"]:
         scheduled[item["id"]] = {
@@ -132,7 +150,7 @@ def commit(root, meta, plan):
             "reminder_time": item["reminder_time"],
             "due_time": item["due_time"],
             "message": item["message"],
-            "cron_note": item.get("cron_note"),
+            "cron_note": cron_notes.get(item["id"]),
         }
     for item in plan["to_cancel"]:
         scheduled.pop(item["id"], None)
@@ -144,12 +162,37 @@ def main():
     ap.add_argument("--root", default=lib.default_root())
     ap.add_argument("--commit", action="store_true",
                     help="record the plan as done (run AFTER creating/cancelling jobs)")
+    ap.add_argument("--cron-note", action="append", metavar="ID=CRON_JOB_ID",
+                    help="map a scheduled reminder id to the cron job you created; "
+                         "required for every to_schedule item on --commit")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --commit even without cron ids (manual recovery only)")
     args = ap.parse_args()
 
     meta, plan = build_plan(args.root)
+
     if args.commit:
-        commit(args.root, meta, plan)
+        try:
+            cron_notes = _parse_cron_notes(args.cron_note)
+        except ValueError as e:
+            print(json.dumps({"ok": False, "error": str(e)}))
+            sys.exit(1)
+
+        missing = [item["id"] for item in plan["to_schedule"]
+                   if item["id"] not in cron_notes]
+        if missing and not args.force:
+            print(json.dumps({
+                "ok": False,
+                "error": "refusing to commit scheduled reminders without cron ids",
+                "missing_cron_notes": missing,
+                "hint": "create each cron job first, then pass "
+                        "--cron-note <id>=<cron-job-id> (or --force for recovery)",
+            }, indent=2))
+            sys.exit(1)
+
+        commit(args.root, meta, plan, cron_notes)
         plan["committed"] = True
+
     print(json.dumps(plan, indent=2))
 
 

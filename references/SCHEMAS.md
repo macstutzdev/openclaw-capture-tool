@@ -115,8 +115,25 @@ Not a bucket — the tool's bookkeeping.
   deadline. This is what prevents double-scheduling. Reminders are only kept
   for records whose status is `open`; moving an item to `waiting`, `blocked`,
   `delegated`, `snoozed`, `done`, or `dropped` cancels live reminder jobs on the
-  next reconcile. `cron_note` is a free slot to record your cron tool's own job
-  reference if that helps you cancel later.
+  next reconcile. `cron_note` holds the id of the cron job you created for this
+  reminder — `reconcile_crons.py --commit` requires it (via
+  `--cron-note <id>=<cron-job-id>`) so the reminder can later be found and
+  cancelled. Times are stored with an explicit UTC offset; naive times captured
+  in the past are normalized to `America/New_York` on capture.
+
+## Reminder cron spec (reconcile_crons.py / reminder_cron_spec.py)
+
+Each `to_schedule` item from `reconcile_crons.py` carries a `cron_spec`: the
+exact, delivering cron job to create. `reminder_cron_spec.py` emits the same
+shape for a single reminder. It is the single source of truth for the mandatory
+Telegram reminder contract — create it verbatim, never hand-build a reminder
+job. Every spec has `sessionTarget: "isolated"`, `payload.kind: "agentTurn"`
+(whose `message` says "Output exactly this reminder text and nothing else…"),
+and an explicit `delivery` block (`mode: "announce"`, `channel: "telegram"`,
+`to: "8688841600"`, `bestEffort: false`). Without that `delivery` block a cron
+job fires but reports `deliveryStatus: not-requested` and sends nothing. The
+`schedule.at` is the reminder instant in UTC. See SKILL.md → "Mandatory Telegram
+reminder cron contract" for the validation and delivery-check rules.
 
 ## Enrichment output
 

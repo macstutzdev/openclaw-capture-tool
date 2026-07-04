@@ -134,10 +134,11 @@ phrases. When time is fuzzy, do not silently guess and move on.
 - **Confirmation format** — after filing and scheduling, reply compactly using
   dates like `Fri, 7/3 @ 3pm`. For multiple reminders, list each one briefly:
   "Added to work to-do. Reminders: Thu, 7/2 @ 5pm; Fri, 7/3 @ 9am."
-- **Failure handling** — if capture succeeds but cron scheduling fails, say so
-  plainly: the item was saved, but the reminder was not scheduled. Do not run
-  `reconcile_crons.py --commit` until the cron jobs were actually created or
-  cancelled.
+- **Failure handling** — if capture succeeds but cron scheduling fails or the
+  created job doesn't pass the delivery contract (see "Mandatory Telegram
+  reminder cron contract" below), say so plainly: the item was saved, but the
+  reminder was not scheduled. Do not run `reconcile_crons.py --commit` until the
+  cron jobs were actually created and validated.
 
 **Examples:**
 Input: `pick up two bags of chlorine tablets`
@@ -212,9 +213,12 @@ python3 scripts/capture.py --bucket inbox --text "the thing we discussed" \
 ```
 
 The script prints JSON with the stored `record`, a ready-to-send
-`confirmation`, and `reminder_needed`. **Always reply to Cormac** so he knows it
-landed and can correct fast. If no reminder was needed, the script confirmation
-is enough. If reminders were scheduled, include the exact reminder time(s) in
+`confirmation`, `reminder_needed`, and any `warnings`. Due and reminder times
+are normalized to carry an explicit offset; if you pass a naive time (no
+timezone), it's interpreted as `America/New_York` and a warning says so — glance
+at `warnings` and correct the time if that assumption was wrong. **Always reply
+to Cormac** so he knows it landed and can correct fast. If no reminder was
+needed, the script confirmation is enough. If reminders were scheduled, include the exact reminder time(s) in
 the compact format above, e.g. "Added to work to-do. Reminder: Fri, 7/3 @ 3pm."
 Full field list is in `references/SCHEMAS.md`.
 
@@ -226,24 +230,132 @@ entries filed with `type: todo` — any open to-do with `reminder_times` earns
 one or more reminders, regardless of which bucket it's in. Older records with a
 `due_time` but no `reminder_times` fall back to one reminder at `due_time`.
 
+**Reminder delivery is too important to improvise.** A cron job that merely
+fires does *not* send anything to Telegram — it must carry an explicit
+`delivery` block (see the contract below). This has silently failed before, so
+the scripts now hand you the exact cron payload to create; do not hand-build it.
+
 ```bash
-# 1. See what needs scheduling / cancelling
+# 1. See what needs scheduling / cancelling. Each "to_schedule" item now
+#    includes a ready-to-use "cron_spec" — the exact, delivering cron job.
 python3 scripts/reconcile_crons.py
 
-# 2. For each item in "to_schedule", create a cron job with YOUR cron tool that
-#    fires at reminder_time and sends the "message" over Telegram. For each item
-#    in "to_cancel", cancel that job.
+# 2. For each item in "to_schedule", create a cron job from its "cron_spec"
+#    VERBATIM with your cron tool. (Equivalently, regenerate it with
+#    reminder_cron_spec.py.) For each item in "to_cancel", cancel that job by
+#    its cron id (stored earlier in metadata as cron_note).
 
-# 3. Record that you did it, so nothing double-schedules next time
-python3 scripts/reconcile_crons.py --commit
+# 3. VALIDATE each created job (see below), then record what you did — passing
+#    the cron job id you got back so cancellation/debugging works later.
+python3 scripts/reconcile_crons.py --commit \
+    --cron-note wt-20260702-0001=<cron-job-id>
 ```
 
-The script only computes the plan — it can't touch cron or Telegram itself, so
-step 2 is your job. Re-running reconcile is always safe: already-scheduled
-reminders won't be scheduled again. It also cancels reminders whose task was
-completed, moved, left `open` status, removed from `reminder_times`, or whose
-reminder time has passed. Run it after any batch of captures or corrections
-that touched a due time, reminder time, or lifecycle state.
+`--commit` refuses to record any `to_schedule` reminder unless you pass a
+`--cron-note <id>=<cron-job-id>` for it — this stops the tool from believing a
+reminder is live when the cron job was never really created. `--force` bypasses
+the check for manual recovery only.
+
+Re-running reconcile is always safe: already-scheduled reminders won't be
+scheduled again. It also cancels reminders whose task was completed, moved, left
+`open` status, removed from `reminder_times`, or whose reminder time has passed.
+Run it after any batch of captures or corrections that touched a due time,
+reminder time, or lifecycle state.
+
+### Mandatory Telegram reminder cron contract
+
+Every reminder cron job that must notify Cormac MUST use explicit announce
+delivery. The `cron_spec` from `reconcile_crons.py` (and
+`reminder_cron_spec.py`) already satisfies this — create it unchanged.
+
+Required fields:
+
+- `sessionTarget: "isolated"`
+- `wakeMode: "now"`
+- `payload.kind: "agentTurn"`
+- `payload.lightContext: true`
+- `payload.timeoutSeconds: 60`
+- `payload.message` — an **"Output exactly this reminder text and nothing
+  else:"** instruction wrapping the reminder body. Never phrase it as "send
+  Cormac…"; the delivery layer does the sending, and telling the child agent to
+  "send" makes it reach for messaging tools and narrate delivery failures.
+- `delivery.mode: "announce"`
+- `delivery.channel: "telegram"`
+- `delivery.to: "8688841600"`
+- `delivery.bestEffort: false`
+
+Do NOT use, for a reminder meant to reach Cormac:
+
+- `sessionTarget: "main"`
+- `payload.kind: "systemEvent"`
+- a cron job with no `delivery` block
+- a reminder that relies only on the cron run `summary`
+
+Canonical shape (this is exactly what the scripts emit):
+
+```json
+{
+  "name": "Capture reminder: wt-20260702-0001",
+  "schedule": { "kind": "at", "at": "2026-07-04T13:00:00.000Z" },
+  "deleteAfterRun": true,
+  "sessionTarget": "isolated",
+  "wakeMode": "now",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Output exactly this reminder text and nothing else:\n\n⏰ Reminder: Call the pool inspector",
+    "timeoutSeconds": 60,
+    "lightContext": true
+  },
+  "delivery": {
+    "mode": "announce",
+    "channel": "telegram",
+    "to": "8688841600",
+    "bestEffort": false
+  }
+}
+```
+
+### Validate before you commit
+
+After creating each reminder cron job, inspect the job you got back and confirm:
+
+- `sessionTarget == "isolated"`
+- `payload.kind == "agentTurn"`
+- `delivery.mode == "announce"`
+- `delivery.channel == "telegram"`
+- `delivery.to == "8688841600"`
+
+If validation fails: do **not** run `reconcile_crons.py --commit`; delete or
+replace the malformed job; and tell Cormac the item was captured but the
+reminder was not safely scheduled. **Never commit reminder metadata until the
+actual cron job has been validated for Telegram delivery.**
+
+### `status: ok` is not proof of delivery
+
+A cron run reporting `status: ok` only means the task ran. It does **not** mean
+Telegram delivery happened. Always inspect `deliveryStatus`:
+
+- `deliveryStatus: "delivered"` → the reminder actually reached Cormac. Good.
+- `deliveryStatus: "not-requested"` → the job had no delivery block. **Treat as
+  a failed reminder.**
+- `deliveryStatus: "failed"` or `null` → also a failure.
+
+A successful direct `message(action=send)` test proves only that Telegram
+credentials and routing work. It does **not** prove cron reminders are
+configured correctly — those need a separate cron-run delivery test.
+
+### Reminder recovery
+
+If a reminder did not arrive:
+
+1. Check the cron run log (e.g. `/data/.openclaw/cron/runs/<job-id>.jsonl`).
+2. If `deliveryStatus` is `not-requested` (or `failed`/`null`), the cron job was
+   malformed — it fired but delivered nothing.
+3. Recreate the reminder from a fresh `cron_spec` (explicit announce delivery).
+4. `python3 scripts/reconcile_crons.py --commit --cron-note <id>=<new-job-id>`.
+5. If the old job still exists, cancel it.
+6. Tell Cormac whether the original item was saved and whether a replacement
+   reminder was scheduled.
 
 ## Review and planning loop
 
@@ -399,7 +511,10 @@ there's nothing to migrate.
 - If a file looks empty or missing, re-run `bootstrap.py` — it won't overwrite
   existing content.
 - If a reminder didn't fire, check `metadata.json` under `scheduled` to see what
-  the tool thinks is scheduled, and re-run the reconcile loop.
+  the tool thinks is scheduled (the `cron_note` there is the cron job id), check
+  that job's run log for `deliveryStatus`, and follow "Reminder recovery" above.
+  Remember: `status: ok` with `deliveryStatus: not-requested` means the reminder
+  silently failed to send.
 
 ## Testing before you rely on it
 
@@ -418,3 +533,9 @@ Send one message per bucket in real Telegram — a work task, a personal task,
 a work shopping item, a personal shopping item, a MyPoolDashboard idea/todo/bug,
 and something deliberately vague — and confirm the sorting, confirmations, and
 reminders all behave before trusting it day to day.
+
+For reminders specifically, do a real cron-run delivery test — schedule one a
+minute or two out from a `cron_spec`, let it fire, and confirm the run log shows
+`deliveryStatus: delivered` and that the Telegram message actually arrived. A
+direct `message(action=send)` test is not a substitute: it only proves routing
+works, not that the cron job is shaped correctly.

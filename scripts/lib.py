@@ -21,6 +21,19 @@ try:
 except ImportError:  # pragma: no cover - OpenClaw normally runs on macOS/Linux.
     fcntl = None
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9
+    ZoneInfo = None
+
+# Where the reminder logic lives. Cormac thinks in Eastern time, so naive
+# datetimes are interpreted here unless an explicit offset is supplied.
+DEFAULT_TZ = os.environ.get("CAPTURE_TIMEZONE", "America/New_York")
+
+# The Telegram chat reminders are delivered to. Override with the
+# CAPTURE_TELEGRAM_TO env var if the account ever changes.
+DEFAULT_TELEGRAM_TO = os.environ.get("CAPTURE_TELEGRAM_TO", "8688841600")
+
 BUCKETS = (
     "work_todo", "personal_todo", "work_shopping", "personal_shopping",
     "mypooldash", "inbox",
@@ -311,3 +324,113 @@ def all_remindable_entries(root):
         if r.get("type") == "todo":
             tasks[r["id"]] = r
     return tasks
+
+
+# ---------- time normalization ----------
+
+def normalize_iso(value):
+    """Return an ISO 8601 string that always carries a UTC offset.
+
+    Cron needs an absolute instant, but Cormac (and the classifying agent)
+    often writes naive times like '2026-07-02T15:00'. A naive value is
+    interpreted in DEFAULT_TZ (America/New_York), so DST is handled correctly.
+    Returns (normalized_iso, was_naive). Raises ValueError on unparseable input.
+    """
+    dt = datetime.fromisoformat(value)
+    was_naive = dt.tzinfo is None
+    if was_naive:
+        tz = ZoneInfo(DEFAULT_TZ) if ZoneInfo is not None else None
+        if tz is None:  # pragma: no cover - very old Python
+            dt = dt.astimezone()
+        else:
+            dt = dt.replace(tzinfo=tz)
+    return dt.replace(microsecond=0).isoformat(), was_naive
+
+
+def _to_utc_z(value):
+    """ISO string -> UTC instant formatted like '2026-07-04T13:00:00.000Z'."""
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        tz = ZoneInfo(DEFAULT_TZ) if ZoneInfo is not None else None
+        dt = dt.replace(tzinfo=tz) if tz is not None else dt.astimezone()
+    dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+# ---------- reminder cron spec ----------
+#
+# This is the single source of truth for the "mandatory Telegram reminder cron
+# contract" (see SKILL.md). Every reminder cron job MUST use explicit announce
+# delivery to Telegram; a job without it fires but delivers nothing. Both
+# reminder_cron_spec.py and reconcile_crons.py build their specs here so the
+# contract can never drift between them.
+
+def reminder_message(title, due_short=None):
+    """The one-line reminder body Cormac should receive."""
+    suffix = f" (due {due_short})" if due_short else ""
+    return f"⏰ Reminder: {title}{suffix}"
+
+
+def reminder_cron_spec(reminder_id, reminder_time, message, telegram_to=None):
+    """Build the canonical, delivering cron job spec for one reminder.
+
+    The isolated child agent is told to *output* the text, never to "send" it —
+    the delivery layer does the sending. Instructing it to send invites it to
+    reach for messaging tools and narrate failures.
+    """
+    to = telegram_to or DEFAULT_TELEGRAM_TO
+    return {
+        "name": f"Capture reminder: {reminder_id}",
+        "schedule": {"kind": "at", "at": _to_utc_z(reminder_time)},
+        "deleteAfterRun": True,
+        "sessionTarget": "isolated",
+        "wakeMode": "now",
+        "payload": {
+            "kind": "agentTurn",
+            "message": f"Output exactly this reminder text and nothing else:\n\n{message}",
+            "timeoutSeconds": 60,
+            "lightContext": True,
+        },
+        "delivery": {
+            "mode": "announce",
+            "channel": "telegram",
+            "to": to,
+            "bestEffort": False,
+        },
+    }
+
+
+# The contract a created cron job must satisfy to count as a real reminder.
+# Kept as data so both scripts and SKILL.md validation stay in lock-step.
+REMINDER_CONTRACT = {
+    "sessionTarget": "isolated",
+    "payload.kind": "agentTurn",
+    "delivery.mode": "announce",
+    "delivery.channel": "telegram",
+}
+
+
+def validate_reminder_job(job, telegram_to=None):
+    """Check a created cron job against the delivery contract.
+
+    Returns a list of human-readable problems; empty means the job is a valid
+    delivering Telegram reminder. Guards against the two observed failure
+    shapes: sessionTarget "main" + systemEvent, and a missing delivery block.
+    """
+    to = telegram_to or DEFAULT_TELEGRAM_TO
+    problems = []
+    if not isinstance(job, dict):
+        return ["cron job is not an object"]
+    if job.get("sessionTarget") != "isolated":
+        problems.append(f'sessionTarget must be "isolated" (got {job.get("sessionTarget")!r})')
+    payload = job.get("payload") or {}
+    if payload.get("kind") != "agentTurn":
+        problems.append(f'payload.kind must be "agentTurn" (got {payload.get("kind")!r})')
+    delivery = job.get("delivery") or {}
+    if delivery.get("mode") != "announce":
+        problems.append(f'delivery.mode must be "announce" (got {delivery.get("mode")!r})')
+    if delivery.get("channel") != "telegram":
+        problems.append(f'delivery.channel must be "telegram" (got {delivery.get("channel")!r})')
+    if str(delivery.get("to")) != str(to):
+        problems.append(f'delivery.to must be {to!r} (got {delivery.get("to")!r})')
+    return problems

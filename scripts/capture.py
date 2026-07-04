@@ -46,6 +46,32 @@ def _split_csv(value):
     return [item.strip() for item in value.split(",") if item.strip()] if value else None
 
 
+def _normalize_times(args, warnings):
+    """Give --due and every --reminder-at an explicit UTC offset.
+
+    Cron needs an absolute instant, but times often arrive naive (e.g.
+    '2026-07-02T15:00'). A naive value is interpreted in America/New_York and
+    a warning is recorded so the ambiguity is visible rather than silent."""
+    if args.due:
+        try:
+            args.due, was_naive = lib.normalize_iso(args.due)
+            if was_naive:
+                warnings.append(f"--due had no timezone; assumed {lib.DEFAULT_TZ} → {args.due}")
+        except ValueError:
+            raise ValueError(f"--due is not a valid ISO 8601 time: {args.due!r}")
+    if args.reminder_at:
+        fixed = []
+        for t in args.reminder_at:
+            try:
+                norm, was_naive = lib.normalize_iso(t)
+            except ValueError:
+                raise ValueError(f"--reminder-at is not a valid ISO 8601 time: {t!r}")
+            if was_naive:
+                warnings.append(f"--reminder-at had no timezone; assumed {lib.DEFAULT_TZ} → {norm}")
+            fixed.append(norm)
+        args.reminder_at = fixed
+
+
 def build_record(args):
     b = args.bucket
     if b in lib.TODO_BUCKETS:
@@ -103,7 +129,9 @@ def main():
     ap.add_argument("--context", help="optional free-form context label")
     args = ap.parse_args()
 
+    warnings = []
     try:
+        _normalize_times(args, warnings)
         record = build_record(args)
         record["id"] = lib.next_id(args.root, args.bucket)
         lib.append_line(lib.paths(args.root)[args.bucket], lib.format_line(record))
@@ -119,6 +147,7 @@ def main():
         "record": record,
         "confirmation": CONFIRM[args.bucket],
         "reminder_needed": reminder_needed,
+        "warnings": warnings,
     }, indent=2))
 
 
