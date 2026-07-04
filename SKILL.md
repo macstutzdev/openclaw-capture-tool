@@ -372,7 +372,14 @@ python3 scripts/review.py --mode inbox
 python3 scripts/review.py --mode all
 ```
 
-Relay the brief in a compact way and add useful judgement:
+**Default to an interactive checklist.** For any review or planning request,
+lead with the tap-to-mark-done checklist rather than a wall of text: run
+`review.py --mode <mode> --buttons` and send that payload so Cormac can clear
+items by tapping (see "Interactive checklists" below). Pair it with a short
+spoken-style brief of your judgement — what's most urgent, what to drop. Fall
+back to the plain text brief only when the checklist would be empty, when inline
+buttons are unavailable/rejected for his chat, or when he explicitly asks for a
+plain list. Either way, add useful judgement:
 
 - For `today`, call out overdue, due today, blocked, waiting, and inbox items.
 - For `week`, call out the next seven days, delegated/waiting items, and stale
@@ -384,6 +391,74 @@ Relay the brief in a compact way and add useful judgement:
 
 If a review reveals time-sensitive work without reminders, propose exact
 reminder times using the time-sensitive communication rules above.
+
+### Interactive checklists (tap to mark done)
+
+Telegram inline buttons let Cormac clear items by tapping instead of typing.
+`review.py --buttons` emits a ready-to-send OpenClaw `send` payload — a vertical
+checklist where each button carries `callback_data: done:<id>`. Send it with
+your Telegram message tool; don't hand-build the button JSON.
+
+```bash
+# Build the checklist payload for a mode (today / week / stale / inbox / all)
+python3 scripts/review.py --mode today --buttons
+```
+
+The payload looks like:
+
+```json
+{
+  "action": "send",
+  "channel": "telegram",
+  "to": "8688841600",
+  "message": "Today — tap an item to mark it done:",
+  "buttons": [
+    [{ "text": "☐ Call the pool inspector", "callback_data": "done:wt-20260703-0001" }],
+    [{ "text": "☐ Book dentist", "callback_data": "done:pt-20260703-0002" }]
+  ]
+}
+```
+
+**The round-trip when Cormac taps a button:**
+
+1. OpenClaw delivers the tap to you as plain text: `callback_data: done:<id>`
+   (unclaimed callbacks arrive this way — no webhook needed).
+2. Parse the id after `done:` and complete it:
+   `python3 scripts/correct.py --id <id> --done`.
+3. Edit the message in place so the item shows as ticked — use your Telegram
+   `edit` action with the `chatId`/`messageId` of the checklist message, flipping
+   that row's `☐` to `☑` (and dropping the button, since it's handled):
+
+   ```json
+   {
+     "action": "edit",
+     "channel": "telegram",
+     "chatId": "8688841600",
+     "messageId": "<the checklist message id>",
+     "content": "Today — tap an item to mark it done:",
+     "buttons": [
+       [{ "text": "☑ Call the pool inspector (done)", "callback_data": "noop" }],
+       [{ "text": "☐ Book dentist", "callback_data": "done:pt-20260703-0002" }]
+     ]
+   }
+   ```
+
+4. If the completed item had reminders, run the reconcile loop so its cron jobs
+   are cancelled (marking it done makes reconcile emit it under `to_cancel` with
+   the `cron_note` cron id to delete).
+
+Notes and limits:
+
+- Inline buttons may be gated by config
+  (`channels.telegram.capabilities.inlineButtons` — needs `dm`/`all`/allowlist
+  for Cormac's chat). If a checklist send is rejected, fall back to the plain
+  text brief and let him reply in words.
+- `callback_data` is capped at 64 bytes; `done:<id>` stays well under.
+- Use `callback_data` (or `web_app`) buttons — OpenClaw's Telegram renderer
+  currently drops plain `url` buttons.
+- For a quick "pick one/several" question rather than a done-checklist, a native
+  poll (`openclaw message poll ... --poll-multi`) is simpler, since the answer
+  comes back without any callback handling.
 
 ## Lifecycle management
 
